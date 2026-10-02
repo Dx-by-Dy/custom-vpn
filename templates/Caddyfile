@@ -1,4 +1,6 @@
 {
+	# nothing uses the admin API; with host networking it would listen on the host's localhost:2019
+	admin off
 	# tcp/443 belongs to xray, so certificates come via HTTP-01 on :80 only
 	auto_https disable_redirects
 	cert_issuer acme {

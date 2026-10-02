@@ -27,6 +27,8 @@ services:
     <<: *common
     image: ${HYSTERIA_IMAGE}
     command: ["server", "-c", "/etc/hysteria/config.yaml"]
+    environment:
+      HYSTERIA_DISABLE_UPDATE_CHECK: "1" # version is pinned in .env
     depends_on:
       caddy:
         condition: service_healthy
