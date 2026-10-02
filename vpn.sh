@@ -12,6 +12,10 @@ DEFAULT_REPO_URL=https://github.com/Dx-by-Dy/custom-vpn.git
 DEFAULT_REPO_BRANCH=main
 # Files and directories that hold this server's state; never taken from the repo
 STATE_PATHS=(.env users.conf data generated)
+# What vpn.sh changed on the host outside this directory, for `uninstall`
+HOST_STATE=/var/lib/custom-vpn
+SYSCTL_CONF=/etc/sysctl.d/99-vpn.conf
+SSH_HARDENING_CONF=/etc/ssh/sshd_config.d/00-vpn-hardening.conf
 ASSUME_YES=false
 
 usage() {
@@ -26,6 +30,7 @@ Setup:
   logs                    follow container logs
   tune                    enable BBR and bigger UDP buffers (sysctl)
   install-docker          install docker via get.docker.com
+  uninstall               remove everything vpn.sh set up on this host (asks what to keep)
   firewall [--dry-run]    enable ufw for ssh, VPN ports and other listening
                           services, optionally disable SSH password login
 
@@ -594,15 +599,21 @@ cmd_links() {
 
 cmd_tune() {
   require_root tune
+  # Remember the values before the first tuning, so `uninstall` can put them back
+  if [[ ! -f $SYSCTL_CONF && ! -f $HOST_STATE/sysctl.orig ]]; then
+    mkdir -p "$HOST_STATE"
+    sysctl net.core.default_qdisc net.ipv4.tcp_congestion_control net.core.rmem_max net.core.wmem_max |
+      sed 's/ = /=/' >"$HOST_STATE/sysctl.orig"
+  fi
   # BBR for xray (TCP), bigger UDP buffers for hysteria (QUIC)
-  cat >/etc/sysctl.d/99-vpn.conf <<'EOF'
+  cat >"$SYSCTL_CONF" <<'EOF'
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 EOF
-  sysctl -q -p /etc/sysctl.d/99-vpn.conf
-  info "sysctl tuned (/etc/sysctl.d/99-vpn.conf)"
+  sysctl -q -p "$SYSCTL_CONF"
+  info "sysctl tuned ($SYSCTL_CONF)"
 }
 
 install_timer() {
@@ -643,6 +654,8 @@ EOF
 cmd_install_docker() {
   command -v docker >/dev/null && { info "docker already installed"; return; }
   curl -fsSL https://get.docker.com | sh
+  mkdir -p "$HOST_STATE"
+  touch "$HOST_STATE/docker-installed"
 }
 
 cmd_deploy() {
@@ -839,11 +852,20 @@ cmd_firewall() {
     command -v apt-get >/dev/null || die "ufw is not installed"
     apt-get install -y -qq ufw >/dev/null
   fi
+  # Record what we change, for `uninstall`
+  mkdir -p "$HOST_STATE"
+  if [[ ! -f $HOST_STATE/firewall ]]; then
+    local status
+    status=$(ufw status)
+    [[ $status == *"Status: active"* ]] && echo "was_active=1" >"$HOST_STATE/firewall" ||
+      echo "was_active=0" >"$HOST_STATE/firewall"
+  fi
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
   for rule in "${rules[@]}"; do
     # ufw rejects some characters in comments (e.g. the apostrophe in "Let's")
     ufw allow "${rule%% *}" comment "$(tr -cd 'A-Za-z0-9 ()/._-' <<<"${rule#* }")" >/dev/null
+    echo "rule ${rule%% *} ${rule#* }" >>"$HOST_STATE/firewall"
   done
   ufw --force enable >/dev/null
   ufw status verbose
@@ -853,7 +875,7 @@ cmd_firewall() {
 
 # Optional: key-only SSH login, only when some key is installed
 harden_ssh() {
-  local conf=/etc/ssh/sshd_config.d/00-vpn-hardening.conf keys
+  local conf=$SSH_HARDENING_CONF keys
   keys=$(cat /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys 2>/dev/null | grep -cE '^(ssh-|ecdsa-|sk-)' || true)
   if ((keys == 0)); then
     warn "no SSH keys in authorized_keys, keeping password login"
@@ -882,6 +904,106 @@ EOF
   fi
 }
 
+# --- uninstall ---------------------------------------------------------------
+
+cmd_uninstall() {
+  require_root uninstall
+  echo "This stops the VPN for everyone and removes what vpn.sh set up on this host:"
+  echo "containers, the maintenance timer and sysctl tuning. It asks about the rest"
+  echo "(images, firewall, SSH, keys and users, docker)."
+  ask "Uninstall?" n || return 0
+
+  # Containers by compose label: works even without a usable .env
+  local ids images=""
+  ids=$("$DOCKER" ps -aq --filter label=com.docker.compose.project=vpn 2>/dev/null || true)
+  if [[ -n $ids ]]; then
+    images=$("$DOCKER" inspect -f '{{.Config.Image}}' $ids | sort -u)
+    "$DOCKER" rm -f $ids >/dev/null
+    info "containers removed"
+  fi
+
+  local unit
+  for unit in vpn-maintenance vpn-prune; do
+    [[ -f /etc/systemd/system/$unit.timer ]] || continue
+    systemctl disable -q --now "$unit.timer" 2>/dev/null || true
+    rm -f /etc/systemd/system/"$unit".{timer,service}
+    systemctl daemon-reload
+    info "$unit.timer removed"
+  done
+
+  if [[ -f $SYSCTL_CONF ]]; then
+    rm -f "$SYSCTL_CONF"
+    if [[ -f $HOST_STATE/sysctl.orig ]]; then
+      local values
+      mapfile -t values <"$HOST_STATE/sysctl.orig"
+      sysctl -q -w "${values[@]}"
+      rm -f "$HOST_STATE/sysctl.orig"
+      info "sysctl restored"
+    else
+      sysctl -q --system >/dev/null 2>&1 || true
+      warn "values from before tuning are unknown (tuned by an older vpn.sh); BBR and buffer sizes stay until reboot"
+    fi
+  fi
+
+  if [[ -n $images ]] && ask "Remove the images ($(echo $images))?" y; then
+    # shellcheck disable=SC2086
+    "$DOCKER" rmi $images >/dev/null 2>&1 || true
+    info "images removed"
+  fi
+
+  if [[ -f $HOST_STATE/firewall ]] && command -v ufw >/dev/null; then
+    local was_active port desc kind
+    was_active=$(sed -n 's/^was_active=//p' "$HOST_STATE/firewall" | head -1)
+    # Unknown means: assume it was on and keep it on
+    [[ $was_active == 0 ]] || was_active=1
+    if [[ $was_active == 0 ]] && ask "Turn ufw off again and drop the rules vpn.sh added (it was off before)?" y; then
+      ufw --force disable >/dev/null
+      while read -r kind port desc; do
+        [[ $kind == rule ]] && ufw delete allow "$port" >/dev/null 2>&1 || true
+      done <"$HOST_STATE/firewall"
+      rm -f "$HOST_STATE/firewall"
+      info "ufw disabled, rules removed"
+    elif [[ $was_active == 1 ]] && ask "Delete the ufw rules vpn.sh added (ssh stays open)?" y; then
+      while read -r kind port desc; do
+        [[ $kind == rule && $desc != ssh ]] && ufw delete allow "$port" >/dev/null 2>&1 || true
+      done <"$HOST_STATE/firewall"
+      rm -f "$HOST_STATE/firewall"
+      info "ufw rules removed"
+    fi
+  fi
+
+  if [[ -f $SSH_HARDENING_CONF ]] && ask "Allow SSH password login again (remove $SSH_HARDENING_CONF)?" n; then
+    rm -f "$SSH_HARDENING_CONF"
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    info "SSH password login allowed again"
+  fi
+
+  if ask "Delete keys, users and certificates (${STATE_PATHS[*]} backups/)? Everyone's links stop working for good" n; then
+    rm -rf "${STATE_PATHS[@]}" backups .env.bak
+    info "keys, users and certificates deleted"
+  else
+    info "kept ${STATE_PATHS[*]}: ./vpn.sh deploy brings the same VPN back"
+  fi
+
+  if [[ -f $HOST_STATE/docker-installed ]] && ask "Remove docker (installed by ./vpn.sh install-docker)?" n; then
+    # Only what is installed: apt refuses the whole list if one package is unknown
+    local pkgs
+    pkgs=$(dpkg-query -W -f='${Status} ${Package}\n' docker-ce docker-ce-cli containerd.io \
+      docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras docker-model-plugin 2>/dev/null |
+      awk '/ installed / {print $NF}' || true)
+    if [[ -n $pkgs ]]; then
+      # shellcheck disable=SC2086
+      apt-get purge -y -qq $pkgs >/dev/null
+    fi
+    rm -rf /var/lib/docker /var/lib/containerd
+    rm -f "$HOST_STATE/docker-installed"
+    info "docker removed"
+  fi
+
+  rmdir "$HOST_STATE" 2>/dev/null || true
+  info "done; this directory stays, remove it with: rm -rf $PWD"
+}
+
 # --- main --------------------------------------------------------------------
 
 args=()
@@ -893,7 +1015,7 @@ set -- "${args[@]+"${args[@]}"}"
 cmd=${1:-help}
 (($#)) && shift
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | update | firewall) lock ;;
+  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall) lock ;;
 esac
 case $cmd in
   deploy) cmd_deploy ;;
@@ -903,6 +1025,7 @@ case $cmd in
   logs) "$DOCKER" compose logs -f --tail=100 ;;
   tune) cmd_tune ;;
   install-docker) cmd_install_docker ;;
+  uninstall) cmd_uninstall ;;
   firewall) cmd_firewall "$@" ;;
   user) cmd_user "$@" ;;
   links) cmd_links "$@" ;;
