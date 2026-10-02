@@ -19,7 +19,7 @@ usage() {
 Usage: ./vpn.sh <command> [args]
 
 Setup:
-  deploy                  full setup: tune, init, up, expiry timer, links
+  deploy                  full setup: tune, init, up, maintenance timer, links
   init                    create .env, generate missing keys, create the first user
   up                      render configs, check ports, start/restart containers
   down                    stop containers
@@ -42,7 +42,9 @@ Maintenance:
   update images           upgrade xray / hysteria / caddy images to the latest releases
   update repo             update this repo's code from GitHub (keeps .env, users, certificates)
   render                  render configs into generated/ and validate them
-  prune                   drop expired credentials (run hourly by vpn-prune.timer)
+  check                   check containers, certificate, Let's Encrypt path, REALITY target
+  prune                   drop expired credentials
+                          (check and prune run hourly from vpn-maintenance.timer)
   help                    show this help
 
 Options:
@@ -268,6 +270,7 @@ cmd_init() {
   [[ $DOMAIN == "${DOMAIN,,}" ]] || set_var DOMAIN "${DOMAIN,,}"
 
   [[ -n $XRAY_SHORT_ID ]] || set_var XRAY_SHORT_ID "$(rand_hex 8)"
+  [[ -n ${ACME_CHECK_TOKEN:-} ]] || set_var ACME_CHECK_TOKEN "$(rand_hex 16)"
   if [[ -z $XRAY_PRIVATE_KEY || -z $XRAY_PUBLIC_KEY ]]; then
     local keys
     if [[ -n $XRAY_PRIVATE_KEY ]]; then
@@ -329,7 +332,8 @@ check() {
 
 cmd_render() {
   load_env
-  [[ $SUB_PORT != "$XRAY_PORT" ]] || die "SUB_PORT and XRAY_PORT are both tcp/$XRAY_PORT"
+  [[ $(printf '%s\n' "$XRAY_PORT" "$SUB_PORT" "$ACME_HTTP_PORT" | sort -u | wc -l) == 3 ]] ||
+    die "XRAY_PORT, SUB_PORT and ACME_HTTP_PORT must be different tcp ports"
   local valid
   valid=$(users_valid)
   [[ -n $(users_active) ]] || die "no users, run: ./vpn.sh init"
@@ -398,7 +402,51 @@ vpn_ports() {
   echo "$HYSTERIA_PORT/udp hysteria"
   echo "$SUB_PORT/tcp caddy (subscription)"
   echo "$SUB_PORT/udp caddy (subscription, HTTP/3)"
-  echo "80/tcp caddy (Let's Encrypt HTTP-01)"
+  echo "$ACME_HTTP_PORT/tcp caddy (Let's Encrypt HTTP-01)"
+}
+
+# nginx config that hands Let's Encrypt HTTP-01 requests to caddy on ACME_HTTP_PORT
+acme_proxy_snippet() {
+  local port=$ACME_HTTP_PORT
+  [[ $port == 80 ]] && port=8880
+  cat <<EOF
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name $DOMAIN;
+          location /.well-known/acme-challenge/ {
+              proxy_pass http://127.0.0.1:$port;
+              proxy_set_header Host \$host;
+          }
+      }
+EOF
+}
+
+# What to do when a port is taken
+port_hint() {
+  case $1 in
+    "$ACME_HTTP_PORT/tcp")
+      if [[ $ACME_HTTP_PORT == 80 ]]; then
+        echo "    Let's Encrypt only checks port 80. If a web server owns it, keep it there:"
+        echo "    set ACME_HTTP_PORT=8880 in $ENV_FILE and make it pass the checks to caddy, e.g. nginx:"
+        acme_proxy_snippet
+        echo "    (or just the location block inside an existing server for $DOMAIN)"
+      else
+        echo "    set ACME_HTTP_PORT to another free local port and point the port-80 proxy at it"
+      fi
+      ;;
+    "$XRAY_PORT/tcp")
+      echo "    another HTTPS server? Move it, set XRAY_PORT to a free port (REALITY off 443"
+      echo "    looks less natural), or route by SNI in front of both (see README)"
+      ;;
+    "$HYSTERIA_PORT/udp")
+      echo "    set HYSTERIA_PORT to any free UDP port; clients get it on the next subscription refresh"
+      ;;
+    "$SUB_PORT/tcp")
+      echo "    set SUB_PORT to a free port; the port is part of subscription links,"
+      echo "    so every user has to import the subscription again"
+      ;;
+  esac
 }
 
 # Fail if a port we need is held by something other than our containers
@@ -411,7 +459,9 @@ check_ports() {
     [[ $need == "$SUB_PORT/udp" ]] && continue # optional, caddy works without HTTP/3
     while read -r p lport pid proc; do
       [[ $p == "$proto" && $lport == "$port" && $ours != *" $pid "* ]] || continue
-      busy+=("  $need ($desc) is taken by $proc (pid $pid)")
+      busy+=("$need is taken by $proc (pid $pid), needed for $desc")
+      busy+=("$(port_hint "$need")")
+      break
     done <<<"$all"
   done < <(vpn_ports)
   ((${#busy[@]} == 0)) && return
@@ -420,7 +470,30 @@ check_ports() {
     warn "not root, can't see which processes own the ports; continuing"
     return
   fi
-  die "free them or change XRAY_PORT / HYSTERIA_PORT / SUB_PORT in $ENV_FILE (80/tcp can't be changed: Let's Encrypt needs it)"
+  die "nothing started"
+}
+
+# Let's Encrypt validates via http://DOMAIN:80/.well-known/acme-challenge/...; caddy
+# answers "ok" on a secret path there, so we can see that port 80 really reaches it
+# (directly or through a proxy) long before a renewal would fail.
+acme_path_ok() {
+  local i
+  for i in 1 2 3 4 5; do
+    [[ $(curl -s -m 5 --resolve "$DOMAIN:80:127.0.0.1" \
+      "http://$DOMAIN/.well-known/acme-challenge/$ACME_CHECK_TOKEN" 2>/dev/null) == ok ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+acme_path_warning() {
+  warn "port 80 doesn't reach caddy: Let's Encrypt can't renew the certificate for $DOMAIN"
+  if [[ $ACME_HTTP_PORT == 80 ]]; then
+    echo "    caddy should own 80/tcp; see what holds it: ss -ltnp 'sport = :80'" >&2
+  else
+    echo "    the web server on port 80 must pass ACME checks to caddy on $ACME_HTTP_PORT, e.g. nginx:" >&2
+    acme_proxy_snippet >&2
+  fi
 }
 
 preflight() {
@@ -452,6 +525,44 @@ cmd_up() {
   done
   ((${#restart[@]} == 0)) || "$DOCKER" compose restart "${restart[@]}"
   "$DOCKER" compose ps
+  acme_path_ok || acme_path_warning
+}
+
+# Health check for people and for vpn-maintenance.timer (non-zero exit = problem)
+cmd_check() {
+  load_env
+  local failed=0 svc running cert days
+  report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
+
+  running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
+  for svc in xray hysteria caddy; do
+    grep -qx "$svc" <<<"$running" && continue
+    report containers "FAIL: $svc is not running"
+  done
+  [[ $failed == 1 ]] || report containers "ok"
+
+  cert=data/caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$DOMAIN/$DOMAIN.crt
+  if [[ ! -f $cert ]]; then
+    report certificate "FAIL: no certificate yet ($cert)"
+  elif command -v openssl >/dev/null; then
+    days=$((($(date -d "$(openssl x509 -enddate -noout -in "$cert" | cut -d= -f2)" +%s) - $(date +%s)) / 86400))
+    # caddy renews 30 days ahead, so less than 14 means renewals have been failing
+    ((days >= 14)) && report certificate "ok ($days days left)" || report certificate "FAIL: expires in $days days"
+  fi
+
+  if acme_path_ok; then
+    report acme "ok (port 80 reaches caddy)"
+  else
+    report acme "FAIL: port 80 doesn't reach caddy, renewals will fail"
+    acme_path_warning 2>&1 | tail -n +2
+  fi
+
+  if curl -s -o /dev/null -m 8 "https://$REALITY_SNI/"; then
+    report reality "ok ($REALITY_SNI reachable)"
+  else
+    report reality "FAIL: can't reach $REALITY_SNI, VLESS is down; change REALITY_SNI"
+  fi
+  return $failed
 }
 
 cmd_links() {
@@ -492,22 +603,28 @@ EOF
   info "sysctl tuned (/etc/sysctl.d/99-vpn.conf)"
 }
 
-install_prune_timer() {
+install_timer() {
   if [[ $EUID -ne 0 ]] || ! command -v systemctl >/dev/null; then
-    warn "not root or no systemd: rotated credentials won't expire automatically, run ./vpn.sh prune yourself"
+    warn "not root or no systemd: run ./vpn.sh prune and ./vpn.sh check yourself (e.g. from cron)"
     return
   fi
-  cat >/etc/systemd/system/vpn-prune.service <<EOF
+  # Older versions installed vpn-prune.*
+  if [[ -f /etc/systemd/system/vpn-prune.timer ]]; then
+    systemctl disable -q --now vpn-prune.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/vpn-prune.{timer,service}
+  fi
+  cat >/etc/systemd/system/vpn-maintenance.service <<EOF
 [Unit]
-Description=Remove expired VPN credentials
+Description=VPN maintenance: expire rotated credentials, health check
 
 [Service]
 Type=oneshot
 ExecStart=$PWD/vpn.sh prune
+ExecStart=$PWD/vpn.sh check
 EOF
-  cat >/etc/systemd/system/vpn-prune.timer <<'EOF'
+  cat >/etc/systemd/system/vpn-maintenance.timer <<'EOF'
 [Unit]
-Description=Remove expired VPN credentials hourly
+Description=Hourly VPN maintenance
 
 [Timer]
 OnCalendar=hourly
@@ -517,8 +634,8 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable -q --now vpn-prune.timer
-  info "vpn-prune.timer enabled"
+  systemctl enable -q --now vpn-maintenance.timer
+  info "vpn-maintenance.timer enabled (failures show in: systemctl --failed)"
 }
 
 cmd_install_docker() {
@@ -531,7 +648,7 @@ cmd_deploy() {
   if [[ $EUID -eq 0 ]]; then cmd_tune; else warn "not root, skipping sysctl tuning"; fi
   cmd_init
   cmd_up
-  install_prune_timer
+  install_timer
   cmd_links
 }
 
@@ -665,9 +782,9 @@ cmd_update_repo() {
   fi
   info "code updated to $(git log -1 --format='%h %s' "$new") (state backup: $backup)"
 
-  # Continue with the new vpn.sh: pick up new .env keys, re-render, restart what changed
+  # Continue with the new vpn.sh: new .env keys, configs, restarts of what changed, timer
   exec 9>&-
-  exec bash -c './vpn.sh init && ./vpn.sh up'
+  exec ./vpn.sh deploy
 }
 
 # --- firewall ----------------------------------------------------------------
@@ -687,7 +804,11 @@ cmd_firewall() {
   ssh_ports=$(awk '$4 == "sshd" && $1 == "tcp" {print $2}' <<<"$all" | sort -u)
   [[ -n $ssh_ports ]] || { warn "no sshd listener found, assuming 22/tcp"; ssh_ports=22; }
   for port in $ssh_ports; do rules+=("$port/tcp ssh"); done
-  while read -r rule desc; do rules+=("$rule $desc"); done < <(vpn_ports)
+  while read -r rule desc; do
+    # behind a proxy on port 80 the ACME port is local only
+    [[ $rule == "$ACME_HTTP_PORT/tcp" && $ACME_HTTP_PORT != 80 ]] && continue
+    rules+=("$rule $desc")
+  done < <(vpn_ports)
 
   # Anything else listening publicly (another site, a game server...)
   local known
@@ -787,6 +908,7 @@ case $cmd in
   update) cmd_update "$@" ;;
   render) cmd_render ;;
   prune) cmd_prune ;;
+  check) cmd_check ;;
   help | -h | --help) usage ;;
   *) echo "unknown command: $cmd" >&2; usage >&2; exit 1 ;;
 esac

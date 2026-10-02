@@ -1,12 +1,24 @@
 {
 	# nothing uses the admin API; with host networking it would listen on the host's localhost:2019
 	admin off
-	# tcp/443 belongs to xray, so certificates come via HTTP-01 on :80 only
+	# HTTP-01 only (tcp/443 belongs to xray). ACME_HTTP_PORT is 80, or a local port
+	# that a web server owning port 80 forwards /.well-known/acme-challenge/ to.
+	http_port ${ACME_HTTP_PORT}
 	auto_https disable_redirects
 	cert_issuer acme {
 		email ${ACME_EMAIL}
 		disable_tlsalpn_challenge
+		alt_http_port ${ACME_HTTP_PORT}
 	}
+}
+
+# Hold the HTTP-01 port for good, so nothing can take it between renewals unnoticed.
+# Caddy answers ACME challenges before these routes; the secret path lets
+# `vpn.sh check` verify that port 80 reaches us.
+http:// {
+	header -Server
+	respond /.well-known/acme-challenge/${ACME_CHECK_TOKEN} "ok" 200
+	respond 404
 }
 
 # Per-user subscription for client apps: /<token>/sub, import page: /<token>/
