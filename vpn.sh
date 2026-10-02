@@ -7,6 +7,11 @@ USERS_FILE=users.conf
 OUT=generated
 DOCKER=${DOCKER:-docker}
 DEFAULT_GRACE_HOURS=24
+# `update repo` pulls from here; override with REPO_URL / REPO_BRANCH in .env
+DEFAULT_REPO_URL=https://github.com/Dx-by-Dy/custom-vpn.git
+DEFAULT_REPO_BRANCH=main
+# Files and directories that hold this server's state; never taken from the repo
+STATE_PATHS=(.env users.conf data generated)
 ASSUME_YES=false
 
 usage() {
@@ -34,7 +39,8 @@ Users:
                           HOURS (default 24) so clients can refresh the subscription
 
 Maintenance:
-  update                  upgrade images to the latest releases
+  update images           upgrade xray / hysteria / caddy images to the latest releases
+  update repo             update this repo's code from GitHub (keeps .env, users, certificates)
   render                  render configs into generated/ and validate them
   prune                   drop expired credentials (run hourly by vpn-prune.timer)
   help                    show this help
@@ -529,6 +535,14 @@ latest_release() {
 }
 
 cmd_update() {
+  case ${1:-} in
+    images) cmd_update_images ;;
+    repo) cmd_update_repo ;;
+    *) die "usage: ./vpn.sh update images|repo" ;;
+  esac
+}
+
+cmd_update_images() {
   load_env
   local x h c var new changes=()
   x=$(latest_release XTLS/Xray-core) || die "can't reach GitHub"
@@ -569,6 +583,81 @@ cmd_update() {
   fi
   rm -f "$ENV_FILE.bak"
   info "updated"
+}
+
+cmd_update_repo() {
+  load_env
+  local url=${REPO_URL:-$DEFAULT_REPO_URL} branch=${REPO_BRANCH:-$DEFAULT_REPO_BRANCH}
+  local new old tracked index changes
+
+  if ! command -v git >/dev/null; then
+    command -v apt-get >/dev/null || die "git is not installed"
+    ask "git is not installed. Install it?" y || return 0
+    apt-get install -y -qq git >/dev/null
+  fi
+  # Deployments copied without .git become a checkout on the first update
+  [[ -d .git ]] || git init -q
+  git fetch -q "$url" "$branch" || die "can't fetch $branch from $url"
+  new=$(git rev-parse FETCH_HEAD)
+  old=$(git rev-parse -q --verify HEAD || true)
+
+  # A reset to a commit that tracks local state would overwrite it
+  tracked=$(git ls-tree -r --name-only "$new" -- "${STATE_PATHS[@]}")
+  [[ -z $tracked ]] || die "upstream tracks local state ($(echo $tracked)), refusing to update"
+
+  # What the working tree would look like after the update
+  index=$(mktemp -u)
+  GIT_INDEX_FILE=$index git read-tree "$new"
+  changes=$(GIT_INDEX_FILE=$index git diff -R --stat=72 || true)
+  rm -f "$index"
+  if [[ -n $old ]]; then
+    changes+=$(git diff --stat=72 --diff-filter=D "$old" "$new" | sed '$d')
+  fi
+
+  if [[ -z $changes ]]; then
+    git reset -q --hard "$new"
+    info "up to date: $(git log -1 --format='%h %s' "$new")"
+    return
+  fi
+
+  echo "Update from $url ($branch):"
+  if [[ -n $old ]] && git merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
+    git log --format='  %h %s' "$old..$new"
+  else
+    echo "  -> $(git log -1 --format='%h %s' "$new")"
+  fi
+  echo "Files that will change:"
+  echo "$changes" | sed 's/^/  /'
+  if [[ -n $old && -n $(git status --porcelain --untracked-files=no) ]]; then
+    warn "local edits to these files will be lost:"
+    git status --porcelain --untracked-files=no | sed 's/^/  /' >&2
+  fi
+  echo "Kept as is: ${STATE_PATHS[*]} (keys, users, certificates)."
+  echo "Containers whose config changes will be restarted: VPN connections drop for a few seconds."
+  ask "Update?" n || return 0
+
+  # Belt and braces: back up the state and check it survived the reset
+  local backup sums
+  mkdir -p backups
+  chmod 700 backups
+  backup=backups/state-$(date +%Y%m%d-%H%M%S).tar.gz
+  local files=() f
+  for f in .env users.conf; do [[ -f $f ]] && files+=("$f"); done
+  tar -czf "$backup" "${files[@]}"
+  ls -1t backups/state-*.tar.gz | tail -n +11 | xargs -r rm -f
+  sums=$(sha256sum .env users.conf 2>/dev/null || true)
+
+  git reset -q --hard "$new"
+
+  if [[ -n $sums ]] && ! sha256sum --quiet -c <<<"$sums" >/dev/null 2>&1; then
+    tar -xzf "$backup"
+    die "local state changed during the update; restored it from $backup"
+  fi
+  info "code updated to $(git log -1 --format='%h %s' "$new") (state backup: $backup)"
+
+  # Continue with the new vpn.sh: pick up new .env keys, re-render, restart what changed
+  exec 9>&-
+  exec bash -c './vpn.sh init && ./vpn.sh up'
 }
 
 # --- firewall ----------------------------------------------------------------
@@ -685,7 +774,7 @@ case $cmd in
   user) cmd_user "$@" ;;
   links) cmd_links "$@" ;;
   rotate) cmd_rotate "$@" ;;
-  update) cmd_update ;;
+  update) cmd_update "$@" ;;
   render) cmd_render ;;
   prune) cmd_prune ;;
   help | -h | --help) usage ;;

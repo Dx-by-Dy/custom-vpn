@@ -5,3 +5,4 @@ old/
 users.conf
 .env.bak
 .vpn.lock
+backups/
