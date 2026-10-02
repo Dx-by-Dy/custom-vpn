@@ -9,10 +9,11 @@
 	}
 }
 
-# Subscription for client apps: /<token>/sub, import page: /<token>/
+# Per-user subscription for client apps: /<token>/sub, import page: /<token>/
 ${DOMAIN}:${SUB_PORT} {
 	header -Server
-	header /${SUB_TOKEN}/sub {
+	@sub path_regexp ^/[0-9a-f]+/sub$
+	header @sub {
 		Content-Type "text/plain; charset=utf-8"
 		Cache-Control no-store
 		profile-title "base64:${SUB_TITLE_B64}"

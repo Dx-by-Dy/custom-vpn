@@ -2,3 +2,6 @@
 generated/
 data/
 old/
+users.conf
+.env.bak
+.vpn.lock

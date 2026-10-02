@@ -5,9 +5,11 @@ tls:
   cert: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${DOMAIN}/${DOMAIN}.crt
   key: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${DOMAIN}/${DOMAIN}.key
 
+# One "user: password" per credential from users.conf; clients send "user:password"
 auth:
-  type: password
-  password: ${HYSTERIA_PASSWORD}
+  type: userpass
+  userpass:
+    ${HYSTERIA_USERS}
 
 masquerade:
   type: proxy

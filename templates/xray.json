@@ -13,11 +13,7 @@
       "protocol": "vless",
       "settings": {
         "clients": [
-          {
-            "id": "${XRAY_UUID}",
-            "flow": "xtls-rprx-vision",
-            "email": "default"
-          }
+          ${XRAY_CLIENTS}
         ],
         "decryption": "none"
       },
