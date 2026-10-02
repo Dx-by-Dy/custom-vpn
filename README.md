@@ -4,7 +4,7 @@ Xray (VLESS + REALITY + Vision) и Hysteria 2 в Docker, для быстрого
 
 | Сервис   | Порт     | Что делает                                                                    |
 | -------- | -------- | ----------------------------------------------------------------------------- |
-| xray     | 443/tcp  | VLESS REALITY, для посторонних выглядит как `REALITY_SNI` (по умолчанию ozon) |
+| xray     | 443/tcp  | VLESS REALITY, для посторонних выглядит как `REALITY_SNI` (по умолчанию music.yandex.ru) |
 | hysteria | 443/udp  | Hysteria 2 (QUIC)                                                             |
 | caddy    | 8443/tcp | подписки для клиентов (`SUB_PORT`)                                            |
 | caddy    | 80/tcp   | только на время выпуска/продления сертификата Let's Encrypt (HTTP-01)         |

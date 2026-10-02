@@ -426,6 +426,9 @@ preflight() {
   elif [[ -n $public && $resolved != "$public" ]]; then
     warn "$DOMAIN -> $resolved, but this server is $public"
   fi
+  # REALITY contacts its target on every handshake; sites sometimes block server IPs
+  curl -s -o /dev/null -m 8 "https://$REALITY_SNI/" ||
+    warn "this server can't reach https://$REALITY_SNI/: VLESS won't work, change REALITY_SNI"
   check_ports
 }
 
