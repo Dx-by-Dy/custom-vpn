@@ -91,6 +91,8 @@ rand_hex() { od -An -tx1 -N"$1" /dev/urandom | tr -d ' \n'; }
 load_env() {
   [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN and ACME_EMAIL"
   set -a; . "./$ENV_FILE"; set +a
+  REALITY_TARGET=${REALITY_TARGET:-$REALITY_SNI:443}
+  REALITY_XVER=${REALITY_XVER:-0}
   SUB_NAME_ENC=$(urlencode "$SUB_NAME")
   SUB_TITLE_B64=$(printf '%s' "$SUB_NAME" | base64 -w0)
 }
@@ -364,6 +366,14 @@ cmd_render() {
   info "configs rendered to $OUT/"
 }
 
+# REALITY contacts its target on every handshake; sites sometimes block server IPs.
+# Ask the target the way xray does: SNI REALITY_SNI, PROXY header when xver is on.
+reality_target_ok() {
+  local opts=(-s -o /dev/null -m 8 --connect-to "$REALITY_SNI:443:$REALITY_TARGET")
+  [[ $REALITY_XVER == 0 ]] || opts+=(--haproxy-protocol)
+  curl "${opts[@]}" "https://$REALITY_SNI/"
+}
+
 # --- ports -------------------------------------------------------------------
 
 # Sockets on non-loopback addresses: "proto port pid process"
@@ -499,9 +509,8 @@ preflight() {
   elif [[ -n $public && $resolved != "$public" ]]; then
     warn "$DOMAIN -> $resolved, but this server is $public"
   fi
-  # REALITY contacts its target on every handshake; sites sometimes block server IPs
-  curl -s -o /dev/null -m 8 "https://$REALITY_SNI/" ||
-    warn "this server can't reach https://$REALITY_SNI/: VLESS won't work, change REALITY_SNI"
+  reality_target_ok ||
+    warn "this server can't reach $REALITY_TARGET as https://$REALITY_SNI/: VLESS won't work, check REALITY_SNI / REALITY_TARGET"
   check_ports
 }
 
@@ -550,10 +559,10 @@ cmd_check() {
     acme_path_warning 2>&1 | tail -n +2
   fi
 
-  if curl -s -o /dev/null -m 8 "https://$REALITY_SNI/"; then
-    report reality "ok ($REALITY_SNI reachable)"
+  if reality_target_ok; then
+    report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
   else
-    report reality "FAIL: can't reach $REALITY_SNI, VLESS is down; change REALITY_SNI"
+    report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
   fi
   return $failed
 }

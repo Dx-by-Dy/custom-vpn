@@ -37,6 +37,32 @@ Caddy получает сертификат на `DOMAIN` и продлевае�
 
 После запуска `up` проверяет, что запрос на `http://DOMAIN/.well-known/acme-challenge/<секрет>` через порт 80 действительно доходит до caddy.
 
+## Маскировка под свой сайт (self-steal)
+
+Если на сервере уже есть HTTPS-сайт на nginx, VLESS может маскироваться под него: xray встает на 443, сайт переезжает на локальный порт, и всех, кто не VPN-клиент, xray прозрачно отдает сайту. Снаружи — обычный HTTPS к вашему домену с настоящим сертификатом, и никакой зависимости от чужого сайта.
+
+`.env` (пример: сайт `example.com`, VPN на `vpn.example.com`):
+
+```sh
+DOMAIN=vpn.example.com
+ACME_HTTP_PORT=8880          # порт 80 у nginx, см. «Порт 80» выше
+REALITY_SNI=example.com
+REALITY_TARGET=127.0.0.1:8444
+REALITY_XVER=1
+```
+
+nginx — в `server`-блоке сайта на 443 заменить `listen`:
+
+```nginx
+listen 127.0.0.1:8444 ssl http2 proxy_protocol;
+set_real_ip_from 127.0.0.1;
+real_ip_header proxy_protocol;
+```
+
+**PROXY protocol (`REALITY_XVER=1` + `proxy_protocol`/`real_ip`) обязателен.** Без него nginx видит всех посетителей как `127.0.0.1`: правила вида `allow 127.0.0.1` открываются всему интернету, а `limit_req` по IP становится одним общим лимитом. С ним nginx видит настоящие IP, а соединения без заголовка PROXY (в том числе прямые на 8444) просто не принимает. Локальным запросам (мониторинг) ходить через `https://example.com` — они пройдут через xray и останутся `127.0.0.1`.
+
+Все `server`-блоки nginx, слушающие 443, должны переехать — иначе `up` скажет, что 443 занят. Переключение: подготовить `.env`, `./vpn.sh init`, `docker compose pull`, затем одной командой `nginx -t && systemctl reload nginx && ./vpn.sh deploy` — сайт недоступен несколько секунд.
+
 ## Мониторинг
 
 ```sh

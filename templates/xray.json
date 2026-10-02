@@ -22,8 +22,8 @@
         "security": "reality",
         "realitySettings": {
           "show": false,
-          "target": "${REALITY_SNI}:443",
-          "xver": 0,
+          "target": "${REALITY_TARGET}",
+          "xver": ${REALITY_XVER},
           "serverNames": ["${REALITY_SNI}"],
           "privateKey": "${XRAY_PRIVATE_KEY}",
           "shortIds": ["${XRAY_SHORT_ID}"]
