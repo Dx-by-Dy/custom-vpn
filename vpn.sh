@@ -90,7 +90,14 @@ load_env() {
   [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN and ACME_EMAIL"
   set -a; . "./$ENV_FILE"; set +a
   SUB_NAME_ENC=$(urlencode "$SUB_NAME")
-  SUB_TITLE_B64=$(printf '%s' "$SUB_NAME" | base64 -w0)
+  # Plain ASCII names go as is: not every client (e.g. V2Box) decodes "base64:" titles
+  if LC_ALL=C grep -qE '^[ -~]+$' <<<"$SUB_NAME" && [[ $SUB_NAME != *[\"\`]* ]]; then
+    SUB_TITLE=$SUB_NAME
+    SUB_DISPOSITION="attachment; filename=\"$SUB_NAME\""
+  else
+    SUB_TITLE="base64:$(printf '%s' "$SUB_NAME" | base64 -w0)"
+    SUB_DISPOSITION="attachment; filename*=UTF-8''$SUB_NAME_ENC"
+  fi
 }
 
 # Write KEY=VALUE into .env (replace or append) and set it in this shell.

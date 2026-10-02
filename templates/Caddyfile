@@ -16,8 +16,11 @@ ${DOMAIN}:${SUB_PORT} {
 	header @sub {
 		Content-Type "text/plain; charset=utf-8"
 		Cache-Control no-store
-		profile-title "base64:${SUB_TITLE_B64}"
+		Content-Disposition `${SUB_DISPOSITION}`
+		profile-title `${SUB_TITLE}`
 		profile-update-interval 12
+		# No traffic quota or expiry (total=0); without it some clients show their own default
+		subscription-userinfo "upload=0; download=0; total=0; expire=0"
 	}
 	root * /srv
 	file_server
