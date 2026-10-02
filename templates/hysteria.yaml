@@ -1,0 +1,36 @@
+listen: :${HYSTERIA_PORT}
+
+# Let's Encrypt via HTTP-01: needs DOMAIN -> this server and tcp/80 free
+# (tcp/443 is taken by xray, so TLS-ALPN can't be used).
+acme:
+  domains:
+    - ${DOMAIN}
+  email: ${ACME_EMAIL}
+  type: http
+  dir: /acme
+
+auth:
+  type: password
+  password: ${HYSTERIA_PASSWORD}
+
+masquerade:
+  type: proxy
+  proxy:
+    url: ${MASQUERADE_URL}
+    rewriteHost: true
+
+# Don't let clients reach the host itself or private networks
+# (containers run with host networking).
+acl:
+  inline:
+    - reject(0.0.0.0/8)
+    - reject(10.0.0.0/8)
+    - reject(100.64.0.0/10)
+    - reject(127.0.0.0/8)
+    - reject(169.254.0.0/16)
+    - reject(172.16.0.0/12)
+    - reject(192.168.0.0/16)
+    - reject(::1/128)
+    - reject(fc00::/7)
+    - reject(fe80::/10)
+    - direct(all)
