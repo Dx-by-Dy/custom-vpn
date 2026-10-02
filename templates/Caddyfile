@@ -1,0 +1,21 @@
+{
+	# tcp/443 belongs to xray, so certificates come via HTTP-01 on :80 only
+	auto_https disable_redirects
+	cert_issuer acme {
+		email ${ACME_EMAIL}
+		disable_tlsalpn_challenge
+	}
+}
+
+# Subscription for client apps: /<token>/sub, import page: /<token>/
+${DOMAIN}:${SUB_PORT} {
+	header -Server
+	header /${SUB_TOKEN}/sub {
+		Content-Type "text/plain; charset=utf-8"
+		Cache-Control no-store
+		profile-title "base64:${SUB_TITLE_B64}"
+		profile-update-interval 12
+	}
+	root * /srv
+	file_server
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${SUB_NAME}</title>
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --fg: #1d2026; --muted: #6b7280; --accent: #2563eb; --border: #e3e5e8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --card: #1b1e24; --fg: #e8eaee; --muted: #9aa1ad; --accent: #5b8cff; --border: #2c3038; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 440px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 24px; }
+  a.btn, button { display: block; width: 100%; padding: 14px 16px; margin-bottom: 10px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--card); color: var(--fg); font: inherit; font-weight: 600;
+    text-align: left; text-decoration: none; cursor: pointer; }
+  a.btn:hover, button:hover { border-color: var(--accent); }
+  a.btn span, button span { float: right; color: var(--muted); font-weight: 400; }
+  code { display: block; margin-top: 24px; padding: 12px; border-radius: 8px; background: var(--card);
+    border: 1px solid var(--border); font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>${SUB_NAME}</h1>
+  <p>Нажми на свое приложение — подписка добавится сама.</p>
+  <a class="btn" href="hiddify://import/${SUB_URL}#${SUB_NAME_ENC}">Hiddify <span>Android, iOS, ПК</span></a>
+  <a class="btn" href="sn://subscription?url=${SUB_URL_ENC}&amp;name=${SUB_NAME_ENC}">NekoBox <span>Android</span></a>
+  <a class="btn" href="v2box://install-sub?url=${SUB_URL_ENC}&amp;name=${SUB_NAME_ENC}">V2Box <span>iOS, macOS</span></a>
+  <button id="copy">Скопировать ссылку <span>для других приложений</span></button>
+  <code id="url">${SUB_URL}</code>
+</main>
+<script>
+  document.getElementById("copy").onclick = function () {
+    var btn = this;
+    navigator.clipboard.writeText(document.getElementById("url").textContent).then(function () {
+      btn.firstChild.textContent = "Скопировано ";
+    });
+  };
+</script>
+</body>
+</html>

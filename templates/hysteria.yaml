@@ -1,13 +1,9 @@
 listen: :${HYSTERIA_PORT}
 
-# Let's Encrypt via HTTP-01: needs DOMAIN -> this server and tcp/80 free
-# (tcp/443 is taken by xray, so TLS-ALPN can't be used).
-acme:
-  domains:
-    - ${DOMAIN}
-  email: ${ACME_EMAIL}
-  type: http
-  dir: /acme
+# Certificate is issued and renewed by caddy; hysteria reloads it when the files change.
+tls:
+  cert: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${DOMAIN}/${DOMAIN}.crt
+  key: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${DOMAIN}/${DOMAIN}.key
 
 auth:
   type: password

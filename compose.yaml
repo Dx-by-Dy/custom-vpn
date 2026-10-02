@@ -27,6 +27,23 @@ services:
     <<: *common
     image: ${HYSTERIA_IMAGE}
     command: ["server", "-c", "/etc/hysteria/config.yaml"]
+    depends_on:
+      caddy:
+        condition: service_healthy
     volumes:
       - ./generated/hysteria.yaml:/etc/hysteria/config.yaml:ro,z
-      - ./data/hysteria-acme:/acme:z
+      - ./data/caddy:/caddy-data:ro,z
+
+  # TLS certificate for DOMAIN (used by hysteria too) + subscription on DOMAIN:SUB_PORT
+  caddy:
+    <<: *common
+    image: ${CADDY_IMAGE}
+    volumes:
+      - ./generated/Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - ./generated/sub:/srv:ro,z
+      - ./data/caddy:/data:z
+    healthcheck:
+      test: ["CMD", "test", "-s", "/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${DOMAIN}/${DOMAIN}.crt"]
+      interval: 5s
+      start_period: 3m
+      retries: 3

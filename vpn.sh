@@ -10,9 +10,30 @@ DOCKER=${DOCKER:-docker}
 die() { echo "error: $*" >&2; exit 1; }
 info() { echo ">> $*"; }
 
+urlencode() {
+  local LC_ALL=C s=$1 out='' c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [a-zA-Z0-9.~_-]) out+=$c ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 load_env() {
   [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN and ACME_EMAIL"
   set -a; . "./$ENV_FILE"; set +a
+
+  # Derived values used by templates and `links`
+  export SUB_URL="https://$DOMAIN:$SUB_PORT/$SUB_TOKEN/sub"
+  export SUB_PAGE="https://$DOMAIN:$SUB_PORT/$SUB_TOKEN/"
+  export SUB_URL_ENC=$(urlencode "$SUB_URL")
+  export SUB_NAME_ENC=$(urlencode "$SUB_NAME")
+  export SUB_TITLE_B64=$(printf '%s' "$SUB_NAME" | base64 -w0)
+  VLESS_LINK="vless://$XRAY_UUID@$DOMAIN:$XRAY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$REALITY_SNI&fp=chrome&pbk=$XRAY_PUBLIC_KEY&sid=$XRAY_SHORT_ID&type=tcp#$SUB_NAME_ENC-reality"
+  HY2_LINK="hysteria2://$HYSTERIA_PASSWORD@$DOMAIN:$HYSTERIA_PORT/?sni=$DOMAIN#$SUB_NAME_ENC-hy2"
 }
 
 # Write KEY=VALUE into .env (replace or append) and export it.
@@ -32,13 +53,22 @@ xray_cli() { "$DOCKER" run --rm "$XRAY_IMAGE" "$@"; }
 
 cmd_init() {
   [[ -f $ENV_FILE ]] || { cp .env.example "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
+  # Pick up keys added to .env.example after this .env was created
+  local line
+  while IFS= read -r line; do
+    [[ $line =~ ^([A-Z0-9_]+)= ]] || continue
+    grep -q "^${BASH_REMATCH[1]}=" "$ENV_FILE" || echo "$line" >>"$ENV_FILE"
+  done <.env.example
   load_env
   [[ $DOMAIN != vpn.example.com && $ACME_EMAIL != you@example.com ]] ||
     die "set DOMAIN and ACME_EMAIL in $ENV_FILE first"
+  # caddy stores certificates under the lowercase name, hysteria reads them from there
+  [[ $DOMAIN == "${DOMAIN,,}" ]] || set_var DOMAIN "${DOMAIN,,}"
 
   [[ -n $XRAY_UUID ]] || set_var XRAY_UUID "$(cat /proc/sys/kernel/random/uuid)"
   [[ -n $XRAY_SHORT_ID ]] || set_var XRAY_SHORT_ID "$(rand_hex 8)"
   [[ -n $HYSTERIA_PASSWORD ]] || set_var HYSTERIA_PASSWORD "$(rand_hex 16)"
+  [[ -n $SUB_TOKEN ]] || set_var SUB_TOKEN "$(rand_hex 16)"
 
   if [[ -z $XRAY_PRIVATE_KEY || -z $XRAY_PUBLIC_KEY ]]; then
     local keys
@@ -55,37 +85,62 @@ cmd_init() {
   info "secrets are in $ENV_FILE"
 }
 
+# Services whose config changed during render (they need a restart)
+CHANGED=()
+
+# Write content to a file only if it differs (in place: bind mounts keep the same inode);
+# with a service name, mark that service as changed.
+write_file() {
+  local out=$1 content=$2 service=${3:-}
+  cmp -s "$out" <(printf '%s\n' "$content") && return
+  printf '%s\n' "$content" >"$out"
+  chmod 644 "$out"
+  [[ -z $service ]] || CHANGED+=("$service")
+}
+
 # Substitute ${VAR} in a template; every referenced variable must be non-empty.
 render_file() {
-  local tpl=$1 out=$2 content var
+  local tpl=$1 out=$2 service=${3:-} content var
   content=$(<"$tpl")
   for var in $(grep -o '\${[A-Z0-9_]*}' "$tpl" | tr -d '${}' | sort -u); do
     [[ -n ${!var:-} ]] || die "$var is empty (used in $tpl)"
     content=${content//"\${$var}"/"${!var}"}
   done
-  printf '%s\n' "$content" >"$out"
+  write_file "$out" "$content" "$service"
+}
+
+check() {
+  local name=$1 out
+  shift
+  out=$("$DOCKER" run --rm "$@" 2>&1) || die "$name config test failed: $out"
 }
 
 cmd_render() {
   load_env
-  mkdir -p "$OUT"
+  [[ $SUB_PORT != "$XRAY_PORT" ]] || die "SUB_PORT and XRAY_PORT are both tcp/$XRAY_PORT"
+  mkdir -p "$OUT/sub/$SUB_TOKEN"
   chmod 700 "$OUT"
-  render_file templates/xray.json "$OUT/xray.json"
-  render_file templates/hysteria.yaml "$OUT/hysteria.yaml"
-  chmod 644 "$OUT"/*
-  local test
-  test=$("$DOCKER" run --rm -v "$PWD/$OUT/xray.json:/c.json:ro,z" "$XRAY_IMAGE" run -test -c /c.json 2>&1) ||
-    die "xray config test failed: $test"
+  # drop pages left from a previous SUB_TOKEN
+  find "$OUT/sub" -mindepth 1 -maxdepth 1 ! -name "$SUB_TOKEN" -exec rm -rf {} +
+
+  render_file templates/xray.json "$OUT/xray.json" xray
+  render_file templates/hysteria.yaml "$OUT/hysteria.yaml" hysteria
+  render_file templates/Caddyfile "$OUT/Caddyfile" caddy
+  render_file templates/sub.html "$OUT/sub/$SUB_TOKEN/index.html"
+  write_file "$OUT/sub/$SUB_TOKEN/sub" "$(printf '%s\n' "$VLESS_LINK" "$HY2_LINK" | base64 -w0)"
+
+  check xray -v "$PWD/$OUT/xray.json:/c.json:ro,z" "$XRAY_IMAGE" run -test -c /c.json
+  check caddy -v "$PWD/$OUT/Caddyfile:/c:ro,z" "$CADDY_IMAGE" caddy validate --config /c --adapter caddyfile
   info "configs rendered to $OUT/"
 }
 
 preflight() {
   local unit resolved public
-  # Hysteria restarts on ACME failure; repeated failures hit Let's Encrypt rate limits
+  # Repeated ACME failures hit Let's Encrypt rate limits
   resolved=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
   public=$(curl -4 -fsS -m 5 https://ifconfig.me 2>/dev/null || true)
   if [[ -z $resolved ]]; then
-    echo "warning: $DOMAIN doesn't resolve, hysteria won't get a certificate" >&2
+    echo "warning: $DOMAIN doesn't resolve, caddy won't get a certificate" >&2
   elif [[ -n $public && $resolved != "$public" ]]; then
     echo "warning: $DOMAIN -> $resolved, but this server is $public" >&2
   fi
@@ -99,22 +154,32 @@ preflight() {
 }
 
 cmd_up() {
+  local running restart=() svc
+  running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
   cmd_render
   preflight
   "$DOCKER" compose up -d --remove-orphans
+  # compose doesn't notice changed config files; restart what was already running
+  for svc in $(printf '%s\n' "${CHANGED[@]}" | sort -u); do
+    grep -qx "$svc" <<<"$running" && restart+=("$svc")
+  done
+  ((${#restart[@]} == 0)) || "$DOCKER" compose restart "${restart[@]}"
   "$DOCKER" compose ps
 }
 
 cmd_links() {
   load_env
-  local vless hy2
-  vless="vless://$XRAY_UUID@$DOMAIN:$XRAY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$REALITY_SNI&fp=chrome&pbk=$XRAY_PUBLIC_KEY&sid=$XRAY_SHORT_ID&type=tcp#$DOMAIN-reality"
-  hy2="hysteria2://$HYSTERIA_PASSWORD@$DOMAIN:$HYSTERIA_PORT/?sni=$DOMAIN#$DOMAIN-hy2"
-  for link in "$vless" "$hy2"; do
-    echo
-    echo "$link"
-    command -v qrencode >/dev/null && qrencode -t ansiutf8 "$link"
-  done
+  echo
+  echo "VLESS REALITY:  $VLESS_LINK"
+  echo "Hysteria 2:     $HY2_LINK"
+  echo
+  echo "Subscription:   $SUB_URL"
+  echo "Import page:    $SUB_PAGE"
+  if command -v qrencode >/dev/null; then
+    qrencode -t ansiutf8 "$SUB_PAGE"
+  else
+    echo "(apt install qrencode to get a QR code of the import page here)"
+  fi
   echo
 }
 
