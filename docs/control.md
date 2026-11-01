@@ -31,7 +31,7 @@ git clone https://github.com/Dx-by-Dy/custom-vpn.git ~/vpn-control && cd ~/vpn-c
 | `ROUTE_DEFAULT` | маршрут тех, у кого нет своего и нет группы: `none` (только RU, по умолчанию), `local` (выход с хаба) или `EXIT/IP` |
 | `SUB_NAME` | имя профиля в приложениях (с пробелами — в кавычках: `SUB_NAME="Мой VPN"`) |
 | `CONTROL_DOMAIN` | домен управления: под ним будут `head.…` и `v<версия>-<i>.…`. Отдельный домен или поддомен; можно несколько через пробел (`"a.ru b.ru"`) — снимок ляжет в каждый. Пусто — снимки только по ssh |
-| `DNS_API` | API DNSmanager (ISPsystem), например `https://dns-01.smartape.ru:1501/dnsmgr` |
+| `DNS_API` | API DNSmanager (ISPsystem), например `https://dns.hoster.ru:1501/dnsmgr` (адрес панели у регистратора или хостера) |
 | `DNS_USER`, `DNS_PASSWORD` | вход в панель; пароль живет только в этом файле и передается curl'у через stdin |
 | `DNS_TTL` | TTL записей, секунды (300): хабы видят новый снимок за 5 минут + TTL |
 
@@ -57,7 +57,7 @@ git clone https://github.com/Dx-by-Dy/custom-vpn.git ~/vpn-control && cd ~/vpn-c
 ./vpn.sh exit hub add main            # печатает cvpn-exit:...
 # в control
 ./vpn.sh control exit add cz1 'cvpn-exit:...'
-./vpn.sh control exit list               # cz1  109.172.8.54:443  cz1/ip1=… cz1/ip2=…
+./vpn.sh control exit list               # cz1  198.51.100.20:443  cz1/ip1=… cz1/ip2=…
 ```
 
 IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (имена IP — из `EXIT_IPS` на exit'е). Токен расходится по всем хабам в снимке; exit о хабах ничего не знает. Тот же `exit add` с новым токеном обновляет exit (после смены IP: на exit'е `./vpn.sh control hub token main`).
@@ -133,7 +133,7 @@ IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (им�
 
 ```
 >> snapshot v1793570121 for hub1, hub2: generated/state.txt (2858 bytes)
->> in DNS: head.ctl.specterite.ru -> v1793570121 (3 TXT records); hubs take it within 5 min + TTL 300s
+>> in DNS: head.ctl-domain.org -> v1793570121 (3 TXT records); hubs take it within 5 min + TTL 300s
 ```
 
 Хаб раз в 5 минут (`vpn-sync.timer`) читает `head` через резолверы по очереди — системный, 77.88.8.8, 1.1.1.1, 8.8.8.8 — сверяет куски с sha256 из `head`, проверяет подпись, расшифровывает, сверяет версию и применяет: перезаписывает `users.conf`, `groups.conf`, `routing.conf`, `exits.conf`, `ROUTE_DEFAULT`, `SUB_NAME` и перезапускает sing-box (соединения рвутся на секунду). Сразу, не дожидаясь таймера: `./vpn.sh hub control sync` на хабе.
@@ -184,9 +184,9 @@ ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < generated/sta
 ```
 
 ```
-dns-panel    ok (user1870425 at https://dns-01.smartape.ru:1501/dnsmgr)
-dns          ok (timetablers.org: v1793575903 on the name servers of timetablers.org, 77.88.8.8 v1793575903)
-dns          ok (ctl.specterite.ru: v1793575903 on the name servers of specterite.ru, 77.88.8.8 v1793575903)
+dns-panel    ok (user123 at https://dns.hoster.ru:1501/dnsmgr)
+dns          ok (ctl-domain.org: v1793575903 on the name servers of ctl-domain.org, 77.88.8.8 v1793575903)
+dns          ok (ctl.example.ru: v1793575903 on the name servers of example.ru, 77.88.8.8 v1793575903)
 hub          ok (hub2: v1793575903, check 0 min ago: 15 ok)
 route        ok (cz1/ip1 from hub1 hub2)
 ```

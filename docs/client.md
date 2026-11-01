@@ -12,7 +12,7 @@
 # на сервере
 git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn && cd /opt/custom-vpn
 ./vpn.sh client install-docker                    # если docker еще нет
-CLIENT_SUB='https://cdn.specterite.ru:8443/<token>/sub https://cdn2.specterite.ru:8443/<token>/sub' ./vpn.sh client deploy
+CLIENT_SUB='https://hub1.example.ru:8443/<token>/sub https://hub2.example.ru:8443/<token>/sub' ./vpn.sh client deploy
 ```
 
 `CLIENT_SUB` — ссылка на подписку или страницу импорта; можно несколько через пробел (ссылки разных хабов) — клиент берет первую, которая ответит. `CLIENT_LISTEN=127.0.0.1:2080` можно задать тут же или потом в `.env` (затем `./vpn.sh client up`). Если у пользователя несколько маршрутов, клиент ходит через первый; другой — `CLIENT_ROUTE=il1/ip1` (из списка пользователя).
@@ -42,8 +42,8 @@ export HTTPS_PROXY=http://127.0.0.1:2080 HTTP_PROXY=http://127.0.0.1:2080   # д
 
 ```
 containers   ok
-subscription ok (cdn.specterite.ru cdn2.specterite.ru, refreshed 0h ago)
-proxy        ok (127.0.0.1:2080: RU leaves as 91.219.150.99, the rest as 109.172.8.54)
+subscription ok (the main route via hub1.example.ru hub2.example.ru, refreshed 0h ago)
+proxy        ok (127.0.0.1:2080: RU leaves as 203.0.113.10, the rest as 198.51.100.20)
 ```
 
 `subscription` падает, если подписку не удавалось обновить больше 2 суток; `proxy` — если через прокси не проходит даже RU (хабы недоступны). «the rest nowhere» при живом RU — у пользователя маршрут `none` или его exit не работает.
