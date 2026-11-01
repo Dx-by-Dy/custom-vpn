@@ -18,7 +18,8 @@ def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
 {
   log: {level: "warn"},
   dns: {servers: [{type: "https", tag: "doh", server: "1.1.1.1"}]},
-  inbounds: ([
+  # jq 1.7 (Ubuntu 24.04) needs an operator expression in parentheses as a value
+  inbounds: (([
     {
       type: "vless",
       tag: "vless-in",
@@ -60,8 +61,8 @@ def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
       listen_port: ($ENV.CHECK_PORT | tonumber),
       users: [("local", "none", $routes[].name) | {username: "check@\(.)", password: $ENV.CHECK_TOKEN}]
     }
-  ],
-  outbounds: [{type: "direct", tag: "local"}] + [$routes[] | {
+  ]),
+  outbounds: ([{type: "direct", tag: "local"}] + [$routes[] | {
     type: "vless",
     tag: .name,
     server,
@@ -75,7 +76,7 @@ def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
       utls: {enabled: true, fingerprint: "chrome"},
       reality: {enabled: true, public_key, short_id}
     }
-  }],
+  }]),
   route: {
     default_domain_resolver: "doh",
     rule_set: [$rule_sets[] | {type: "local", tag: ., format: "binary", path: "/rule-sets/\(.).srs"}],
