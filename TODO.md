@@ -171,8 +171,23 @@ UUID на каждый IP). Свой `REALITY_SNI` для exit'а, `check` дл�
 
 ### Этап 7. Обвязка
 
-Развертывание хаба на `cdn.specterite.ru` (nginx `stream`, см. ниже) и
-чистка хаба — можно раньше, после этапа 3. README для всех ролей.
+Хаб развернут (2026-11-01) на 91.219.150.99, `cdn.specterite.ru`,
+`/opt/custom-vpn`: nginx `stream` на 443 по SNI (`music.yandex.ru` → sing-box
+на `VLESS_LISTEN=127.0.0.1:8444`, остальное → prime-chinese.ru на
+127.0.0.1:4443 с `proxy_protocol`), Let's Encrypt через nginx :80 → caddy
+:8880, ufw 443/udp + 8443, `ROUTE_DEFAULT=none`, exit `cz1`
+(109.172.8.54, ip1/ip2). Сервер почищен: prospera, timetabler,
+university-schedule, MySQL (архив `/root/cleanup-2026-11-01.tar.gz`), журнал
+до 200M, кэши npm/pnpm. Проверено с ноутбука по подписке: VLESS и hy2 выходят
+с ip1, RU — с хаба, UDP, localtest.me закрыт; сайт работает.
+
+Осталось:
+
+- SNI `cdn.specterite.ru` на 443 сейчас получает сертификат prime-chinese.ru
+  (сайт по умолчанию). Правдоподобнее отдавать его caddy (свой сертификат,
+  404) — через такой же промежуточный `server`, снимающий PROXY protocol;
+- README для всех ролей; тесты шаблонов на jq 1.7 (Ubuntu 24.04), а не
+  только на jq 1.8 ноутбука.
 
 ## Отдельные подписки под клиенты (косметика)
 
