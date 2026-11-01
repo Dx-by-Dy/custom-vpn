@@ -20,6 +20,10 @@ migrate_env() {
 
 cmd_init() {
   local want=${ROLE:-}
+  if [[ $(env_role) == control ]]; then
+    control_init
+    return
+  fi
   if [[ ! -f $ENV_FILE ]]; then
     cp .env.example "$ENV_FILE"
     chmod 600 "$ENV_FILE"
@@ -140,6 +144,7 @@ cmd_install_docker() {
 }
 
 cmd_deploy() {
+  [[ $(env_role) != control ]] || die "control runs nothing: ./vpn.sh init sets it up"
   command -v "$DOCKER" >/dev/null || die "$DOCKER not found, run: ./vpn.sh install-docker"
   if [[ $EUID -eq 0 ]]; then cmd_tune; else warn "not root, skipping sysctl tuning"; fi
   cmd_init

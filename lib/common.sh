@@ -37,6 +37,25 @@ urlencode() {
 
 rand_hex() { od -An -tx1 -N"$1" /dev/urandom | tr -d ' \n'; }
 
+# tmp_dir VAR: a temporary directory into VAR, removed when vpn.sh exits,
+# also on errors (not $(tmp_dir): a subshell couldn't register it)
+TMP_DIRS=()
+cleanup_tmp() { ((${#TMP_DIRS[@]} == 0)) || rm -rf "${TMP_DIRS[@]}"; }
+trap cleanup_tmp EXIT
+tmp_dir() {
+  local dir
+  dir=$(mktemp -d)
+  TMP_DIRS+=("$dir")
+  printf -v "$1" '%s' "$dir"
+}
+
+# ROLE from the environment (ROLE=exit ./vpn.sh deploy) or .env, before load_env
+env_role() {
+  local role=${ROLE:-}
+  [[ -n $role ]] || role=$(sed -n 's/^ROLE=//p' "$ENV_FILE" 2>/dev/null | tail -1)
+  echo "${role:-hub}"
+}
+
 load_env() {
   [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN"
   grep -qE '^XRAY_(PORT|PRIVATE_KEY)=' "$ENV_FILE" && die "$ENV_FILE is from the xray version, run: ./vpn.sh init"
@@ -44,7 +63,9 @@ load_env() {
   ROLE=${ROLE:-hub}
   # .env from before routes: everyone leaves from the hub, as before (empty means none)
   ROUTE_DEFAULT=${ROUTE_DEFAULT-local}
-  [[ $ROLE == hub || $ROLE == exit ]] || die "ROLE must be hub or exit, not $ROLE"
+  [[ $ROLE == hub || $ROLE == exit || $ROLE == control ]] || die "ROLE must be hub, exit or control, not $ROLE"
+  # control is a laptop: no servers, ports or certificates
+  [[ $ROLE != control ]] || return 0
   # caddy is in the "hub" compose profile
   export COMPOSE_PROFILES=$ROLE
   # VLESS_LISTEN=[host:]port, by default all addresses on VLESS_PORT
@@ -66,10 +87,10 @@ load_env() {
   SUB_TITLE_B64=$(printf '%s' "$SUB_NAME" | base64 -w0)
 }
 
-# Commands that exist on one role only: require_role ROLE COMMAND
+# Commands that exist on some roles only: require_role "ROLE..." COMMAND
 require_role() {
   load_env
-  [[ $ROLE == "$1" ]] || die "./vpn.sh $2 is for ROLE=$1 servers, this one is ROLE=$ROLE"
+  [[ " $1 " == *" $ROLE "* ]] || die "./vpn.sh $2 is for ROLE=${1// /\/}, this is ROLE=$ROLE"
 }
 
 # Private conf files (users.conf, hubs.conf, ...): a header comment, then one row per line
@@ -99,10 +120,11 @@ conf_rewrite() {
 }
 
 # Write KEY=VALUE into .env (replace or append) and set it in this shell.
+# VALUE goes in as is: quote it for the shell if it needs that.
 set_var() {
   local key=$1 val=$2
   if grep -q "^$key=" "$ENV_FILE"; then
-    sed -i "s|^$key=.*|$key=$val|" "$ENV_FILE"
+    K=$key V=$val conf_rewrite "$ENV_FILE" 'index($0, ENVIRON["K"] "=") == 1 {print ENVIRON["K"] "=" ENVIRON["V"]; next} {print}'
   else
     echo "$key=$val" >>"$ENV_FILE"
   fi
@@ -115,6 +137,7 @@ singbox_cli() { "$DOCKER" run --rm "$SINGBOX_IMAGE" "$@"; }
 need_pkg() {
   local pkg=$1 why=$2
   command -v "$pkg" >/dev/null && return
+  command -v dnf >/dev/null && die "$pkg is not installed ($why): sudo dnf install $pkg"
   command -v apt-get >/dev/null || die "$pkg is not installed ($why)"
   ask "$pkg is not installed ($why). Install it?" y || die "$pkg is required"
   local out

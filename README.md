@@ -102,6 +102,43 @@ ROLE=exit ./vpn.sh deploy  # ключи, EXIT_IPS, запуск
 - Файлы: `exits.conf` (токены exit'ов), `groups.conf`, `routing.conf` (группа и маршрут пользователя) — их тоже нужно бэкапить.
 - `check` проверяет каждый маршрут через локальный socks (`CHECK_PORT`): `local` и каждый `EXIT/ИМЯ` выходят со своего IP, `none` не выходит никуда, а RU и с ним выходит с хаба; а также свежесть списков RU и пользователей с несуществующим маршрутом.
 
+## Управление с ноутбука (ROLE=control)
+
+Пользователи, группы, маршруты и exit'ы всех хабов можно вести в одном месте — на ноутбуке. Каждое изменение собирается в снимок: JSON → gzip → `age` (свой ключ у каждого хаба) → подпись `ssh-keygen -Y sign`. Хаб применяет снимок, только если он подписан его control, расшифровывается его ключом и новее примененного; иначе остается как есть. Как это устроено целиком — [ARCHITECTURE.md](ARCHITECTURE.md). Пока снимок переносится вручную (`state apply` по ssh), доставка через DNS — следующий этап.
+
+На ноутбуке нужны `jq`, `age` (`sudo dnf install age` / `apt install age`) и `ssh-keygen`; docker не нужен. Отдельная копия репозитория:
+
+```sh
+git clone https://github.com/Dx-by-Dy/custom-vpn.git ~/vpn-control && cd ~/vpn-control
+ROLE=control ./vpn.sh init       # .env и ключ подписи data/control/sign
+./vpn.sh exit add cz1 'cvpn-exit:...'
+```
+
+Подключить хаб (один раз):
+
+```sh
+# на хабе (развернут как обычно):
+./vpn.sh state export > /root/export.json    # если на нем уже есть пользователи
+./vpn.sh control join                        # печатает cvpn-hub:...
+# на ноутбуке:
+./vpn.sh import export.json                  # пользователи хаба с теми же ключами — ссылки не меняются
+./vpn.sh hub add hub1 'cvpn-hub:...'         # печатает cvpn-ctl:... и собирает снимок
+# на хабе:
+./vpn.sh control set 'cvpn-ctl:...'
+```
+
+Дальше все меняется на ноутбуке теми же командами (`user add`, `group`, `exit add`, `rotate`, ...), после каждой — новый снимок в `generated/state.txt`:
+
+```sh
+ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt
+```
+
+- На хабе под control команды, меняющие пользователей и маршруты, отказывают; `user list`, `route list`, `links` работают. `check` показывает версию примененного снимка. `control unset` — вернуть хаб к самостоятельному управлению (пользователи последнего снимка остаются).
+- `hub del` в control — хаб не сможет прочитать следующие снимки (последний примененный у него остается).
+- `ROUTE_DEFAULT` и `SUB_NAME` хабов приходят из `.env` control; `import` предупредит, если у хаба они были другими.
+- `links NAME` в control печатает ссылки пользователя на каждом хабе.
+- **Бэкапить на ноутбуке**: `.env`, `users.conf`, `groups.conf`, `routing.conf`, `exits.conf`, `hubs.conf` и `data/control/` (ключ подписи: хабы доверяют только ему; потерян — новый ключ и `control set` на каждом хабе).
+
 ## Пользователи и подписки
 
 У каждого пользователя свои ключи и своя ссылка на подписку:
@@ -186,6 +223,9 @@ ROLE=exit ./vpn.sh deploy  # ключи, EXIT_IPS, запуск
 | `exit add\|del\|list`               | exit'ы хаба; их IP становятся маршрутами `EXIT/ИМЯ`                      |
 | `group add\|route\|del\|list`       | группы с общим маршрутом                                                 |
 | `route list`                        | кто через какой маршрут выходит                                          |
+| `control join\|set\|unset`           | хаб под управлением control (ноутбука)                                   |
+| `state apply [FILE]` / `state export` | применить снимок control / выгрузить пользователей для `import`        |
+| `hub add\|del\|list`, `publish`, `import` | в `ROLE=control`: хабы, пересобрать снимок, забрать пользователей хаба |
 | `hub add\|token\|del\|list`         | хабы, которые пользуются этим exit'ом (`ROLE=exit`)                      |
 | `links [NAME]`                      | ссылки всех пользователей или одного                                     |
 | `rotate NAME\|--all [--grace H]`    | новые ключи, старые работают еще H часов (24)                            |

@@ -23,13 +23,17 @@ SYSCTL_CONF=/etc/sysctl.d/99-vpn.conf
 SSH_HARDENING_CONF=/etc/ssh/sshd_config.d/00-vpn-hardening.conf
 ASSUME_YES=false
 
-# Commands of this server's ROLE only (all of them before there is a .env)
+# Commands of this ROLE only (all of them before there is a .env)
 usage() {
   local role
   role=$(sed -n 's/^ROLE=//p' "$ENV_FILE" 2>/dev/null | tail -1)
-  cat <<'EOF'
+  # show "ROLES" <<EOF: the text if this role is one of ROLES
+  show() { if [[ -z $role || " $1 " == *" $role "* ]]; then cat; else cat >/dev/null; fi; }
+  show "hub exit control" <<'EOF'
 Usage: ./vpn.sh <command> [args]
 
+EOF
+  show "hub exit" <<'EOF'
 Setup:
   deploy                  full setup: tune, init, up, maintenance timer, links
                           (ROLE=exit ./vpn.sh deploy sets up an exit)
@@ -44,8 +48,20 @@ Setup:
                           services, optionally disable SSH password login
 
 EOF
-  [[ $role == exit ]] || cat <<'EOF'
-Users (hub):
+  show "control" <<'EOF'
+Control (ROLE=control, on a laptop): the scheme of all hubs; every change below
+is published as a signed snapshot that hubs apply
+  init                    create .env and the signing key (ROLE=control ./vpn.sh init)
+  hub add NAME TOKEN      add (or update) a hub from the token `control join` printed on it,
+                          print the token that hub needs
+  hub del NAME            remove a hub: it can't read new snapshots
+  hub list                list hubs
+  publish                 build the snapshot again (generated/state.txt)
+  import FILE             take over the users of a stand-alone hub (`state export` there)
+
+EOF
+  show "hub control" <<'EOF'
+Users (hub, control):
   user add NAME [--group G] [--route R]
                           add a user and print their links
   user del NAME           remove a user, their links stop working immediately
@@ -57,7 +73,7 @@ Users (hub):
                           issue new credentials, the old ones keep working for
                           HOURS (default 24) so clients can refresh the subscription
 
-Routes (hub): where traffic that isn't RU leaves; RU always leaves from the hub
+Routes (hub, control): where traffic that isn't RU leaves; RU always leaves from the hub
   exit add NAME TOKEN     add (or update) an exit from the token `hub add` printed on it;
                           its egress IPs become routes NAME/IPNAME
   exit del NAME           remove an exit
@@ -68,10 +84,19 @@ Routes (hub): where traffic that isn't RU leaves; RU always leaves from the hub
   group del NAME          remove an empty group
   group list              list groups
   route list              who leaves through which route
-                          Routes: local (this hub), none (no internet but RU), EXIT/IPNAME
+                          Routes: local (the hub), none (no internet but RU), EXIT/IPNAME
 
 EOF
-  [[ ${role:-exit} != exit ]] || cat <<'EOF'
+  show "hub" <<'EOF'
+Under control (hub): users, groups and routes come from control's snapshots
+  control join            print the token for `hub add` in control
+  control set TOKEN       trust the control that printed TOKEN (`hub add` there)
+  control unset           manage users here again
+  state apply [FILE]      apply a snapshot (stdin by default): ssh HUB './vpn.sh state apply' < state.txt
+  state export            print this stand-alone hub's users for `import` in control
+
+EOF
+  show "exit" <<'EOF'
 Hubs (ROLE=exit):
   hub add NAME            let hub NAME use this exit, print the token for it
   hub token NAME          print the token again (with egress IPs added since)
@@ -79,7 +104,7 @@ Hubs (ROLE=exit):
   hub list                list hubs
 
 EOF
-  cat <<'EOF'
+  show "hub exit" <<'EOF'
 Maintenance:
   update images           upgrade sing-box / caddy images to the latest releases
   update rules            download the RU lists again (hub; done daily by the timer)
@@ -89,6 +114,12 @@ Maintenance:
                           routes (hub), egress IPs (exit)
   prune                   drop expired credentials, refresh the RU lists
                           (check and prune run hourly from vpn-maintenance.timer)
+EOF
+  show "control" <<'EOF'
+Maintenance:
+  prune                   drop expired credentials (and publish)
+EOF
+  show "hub exit control" <<'EOF'
   help                    show this help
 
 Options:
@@ -107,6 +138,7 @@ EOF
 . lib/uninstall.sh
 . lib/exit.sh
 . lib/routes.sh
+. lib/control.sh
 
 # --- main --------------------------------------------------------------------
 
@@ -119,8 +151,15 @@ set -- "${args[@]+"${args[@]}"}"
 cmd=${1:-help}
 (($#)) && shift
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route) lock ;;
+  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route | control | state | publish | import) lock ;;
 esac
+# Control is a laptop: nothing to run or check there
+if [[ $(env_role) == control ]]; then
+  case $cmd in
+    init | user | links | rotate | prune | exit | group | route | hub | publish | import | up | help | -h | --help) ;;
+    *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
+  esac
+fi
 case $cmd in
   deploy) cmd_deploy ;;
   init) cmd_init ;;
@@ -136,6 +175,10 @@ case $cmd in
   exit) cmd_exit "$@" ;;
   group) cmd_group "$@" ;;
   route) cmd_route "$@" ;;
+  control) cmd_control "$@" ;;
+  state) cmd_state "$@" ;;
+  publish) require_role control publish; cmd_publish ;;
+  import) cmd_import "$@" ;;
   links) cmd_links "$@" ;;
   rotate) cmd_rotate "$@" ;;
   update) cmd_update "$@" ;;

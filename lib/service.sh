@@ -186,6 +186,12 @@ preflight() {
 
 cmd_up() {
   local running restart=() svc
+  # control: a change means a new snapshot
+  if [[ $(env_role) == control ]]; then
+    load_env
+    cmd_publish
+    return
+  fi
   running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
   CHANGED=()
   cmd_render
@@ -233,6 +239,7 @@ cmd_check() {
   [[ $failed == 1 ]] || report containers "ok"
 
   [[ $ROLE == exit ]] || check_hub_cert
+  [[ $ROLE == exit ]] || check_control
   if reality_target_ok; then
     report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
   else

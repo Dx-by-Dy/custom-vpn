@@ -41,7 +41,8 @@ user_vars() {
 
 cmd_user() {
   local action=${1:-} name=${2:-} group="" route=""
-  require_role hub user
+  require_role "hub control" user
+  [[ $action == list ]] || require_editable "user $action"
   case $action in
     add)
       check_name "$name" "user name"
@@ -107,7 +108,8 @@ cmd_user() {
 
 cmd_rotate() {
   local target=${1:-} grace=$DEFAULT_GRACE_HOURS names expires line
-  require_role hub rotate
+  require_role "hub control" rotate
+  require_editable rotate
   [[ -n $target ]] || die "usage: ./vpn.sh rotate NAME|--all [--grace HOURS]"
   shift
   while (($#)); do
@@ -153,8 +155,10 @@ cmd_rotate() {
 
 cmd_prune() {
   load_env
-  [[ $ROLE == hub ]] || return 0
-  rule_sets_refresh 24
+  [[ $ROLE != exit ]] || return 0
+  [[ $ROLE != hub ]] || rule_sets_refresh 24
+  # control drops expired credentials from the snapshots; hubs filter them anyway
+  ! managed || return 0
   [[ -f $USERS_FILE ]] || return 0
   local now
   now=$(date +%s)
@@ -166,7 +170,11 @@ cmd_prune() {
 
 cmd_links() {
   local only=${1:-} name uuid hy_user hy_pass token exp found=false
-  require_role hub links
+  require_role "hub control" links
+  if [[ $ROLE == control ]]; then
+    control_links "$only"
+    return
+  fi
   while read -r name uuid hy_user hy_pass token exp; do
     [[ -z $only || $name == "$only" ]] || continue
     found=true

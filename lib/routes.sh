@@ -179,7 +179,8 @@ rule_sets_json() {
 
 cmd_exit() {
   local action=${1:-} name=${2:-} token=${3:-} gone users route
-  require_role hub exit
+  require_role "hub control" exit
+  [[ $action == list ]] || require_editable "exit $action"
   case $action in
     add)
       check_name "$name" "exit name"
@@ -202,8 +203,10 @@ cmd_exit() {
       fi
       cmd_up
       # The hub can reach the exit, and each route leaves from its IP
-      sleep 2
-      check_exit_routes "$name"
+      if [[ $ROLE == hub ]]; then
+        sleep 2
+        check_exit_routes "$name"
+      fi
       ;;
     del)
       check_name "$name" "exit name"
@@ -234,7 +237,8 @@ cmd_exit() {
 
 cmd_group() {
   local action=${1:-} name=${2:-} route=${3:-} members
-  require_role hub group
+  require_role "hub control" group
+  [[ $action == list ]] || require_editable "group $action"
   case $action in
     add)
       check_name "$name" "group name"
@@ -243,6 +247,7 @@ cmd_group() {
       check_route "$route" dash-ok
       conf_init "$GROUPS_FILE" "$GROUPS_HEADER"
       echo "$name $route" >>"$GROUPS_FILE"
+      [[ $ROLE != control ]] || cmd_publish
       info "group $name added (route: ${route/#-/ROUTE_DEFAULT}); add users: ./vpn.sh user group USER $name"
       ;;
     route)
@@ -260,6 +265,7 @@ cmd_group() {
       members=$(conf_rows "$ROUTING_FILE" | awk -v g="$name" '$2 == g {printf "%s%s", (n++ ? " " : ""), $1}')
       [[ -z $members ]] || die "group $name has users: $members (./vpn.sh user group USER - or another group)"
       conf_rewrite "$GROUPS_FILE" -v n="$name" '/^#/ || $1 != n'
+      [[ $ROLE != control ]] || cmd_publish
       info "group $name removed"
       ;;
     list)
@@ -280,7 +286,7 @@ cmd_group() {
 }
 
 cmd_route() {
-  require_role hub route
+  require_role "hub control" route
   case ${1:-} in
     list)
       user_routes | awk -v def="${ROUTE_DEFAULT:-none}" '

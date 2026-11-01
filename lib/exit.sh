@@ -105,6 +105,11 @@ hub_print_token() {
 
 cmd_hub() {
   local action=${1:-} name=${2:-} before
+  load_env
+  if [[ $ROLE == control ]]; then
+    cmd_control_hub "$@"
+    return
+  fi
   require_role exit "hub"
   case $action in
     add)
