@@ -41,6 +41,38 @@ vpn_ports() {
   echo "$ACME_HTTP_PORT/tcp caddy (Let's Encrypt HTTP-01)"
 }
 
+# nginx config that owns VLESS_PORT and passes REALITY_SNI on to sing-box on
+# VLESS_LISTEN, everything else to the sites (moved to a local port)
+sni_proxy_snippet() {
+  cat <<EOF
+      # /etc/nginx/nginx.conf, top level (needs libnginx-mod-stream):
+      stream {
+          # by SNI: REALITY_SNI -> sing-box, everything else -> the sites
+          map \$ssl_preread_server_name \$sni_backend {
+              $REALITY_SNI 127.0.0.1:4441;
+              default 127.0.0.1:4443;
+          }
+          server {
+              listen $VLESS_PORT;
+              listen [::]:$VLESS_PORT;
+              ssl_preread on;
+              proxy_pass \$sni_backend;
+              # the sites see the real client address
+              proxy_protocol on;
+          }
+          # sing-box doesn't read the PROXY protocol header: drop it here
+          server {
+              listen 127.0.0.1:4441 proxy_protocol;
+              proxy_pass ${VLESS_LISTEN_HOST/#::/127.0.0.1}:$VLESS_LISTEN_PORT;
+          }
+      }
+      # each site: instead of "listen 443 ssl" / "listen [::]:443 ssl":
+          listen 127.0.0.1:4443 ssl proxy_protocol;
+          set_real_ip_from 127.0.0.1;
+          real_ip_header proxy_protocol;
+EOF
+}
+
 # nginx config that hands Let's Encrypt HTTP-01 requests to caddy on ACME_HTTP_PORT
 acme_proxy_snippet() {
   local port=$ACME_HTTP_PORT
@@ -72,8 +104,9 @@ port_hint() {
       fi
       ;;
     "$VLESS_PORT/tcp")
-      echo "    another HTTPS server? Move it or set VLESS_PORT to a free port"
-      echo "    (REALITY off 443 looks less natural, see the README section on port 443)"
+      echo "    another HTTPS server? Set VLESS_PORT to a free port (REALITY off 443 looks less"
+      echo "    natural), or let nginx pass VLESS on by SNI: VLESS_LISTEN=127.0.0.1:8444 in $ENV_FILE and"
+      VLESS_LISTEN_HOST=127.0.0.1 VLESS_LISTEN_PORT=8444 sni_proxy_snippet
       ;;
     "$HYSTERIA_PORT/udp")
       echo "    set HYSTERIA_PORT to any free UDP port; clients get it on the next subscription refresh"
@@ -93,6 +126,8 @@ check_ports() {
   while read -r need desc; do
     port=${need%/*} proto=${need#*/}
     [[ $need == "$SUB_PORT/udp" ]] && continue # optional, caddy works without HTTP/3
+    # VLESS_LISTEN: VLESS_PORT belongs to the proxy in front of sing-box
+    [[ $need == "$VLESS_PORT/tcp" && -n ${VLESS_LISTEN:-} ]] && continue
     while read -r p lport pid proc; do
       [[ $p == "$proto" && $lport == "$port" && $ours != *" $pid "* ]] || continue
       busy+=("$need is taken by $proc (pid $pid), needed for $desc")
@@ -202,6 +237,15 @@ cmd_check() {
     report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
   else
     report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
+  fi
+  # Through the proxy in front: only sing-box (REALITY passes the handshake on to
+  # the target) answers SNI REALITY_SNI with a valid certificate, a site wouldn't
+  if [[ -n ${VLESS_LISTEN:-} ]]; then
+    if curl -s -o /dev/null -m 8 --connect-to "$REALITY_SNI:443:127.0.0.1:$VLESS_PORT" "https://$REALITY_SNI/"; then
+      report sni-proxy "ok ($VLESS_PORT passes $REALITY_SNI to sing-box)"
+    else
+      report sni-proxy "FAIL: $REALITY_SNI on $VLESS_PORT doesn't reach sing-box on $VLESS_LISTEN"
+    fi
   fi
   if [[ $ROLE == hub ]]; then check_routes; else check_egress; fi
   return $failed

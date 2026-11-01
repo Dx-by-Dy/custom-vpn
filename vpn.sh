@@ -23,7 +23,10 @@ SYSCTL_CONF=/etc/sysctl.d/99-vpn.conf
 SSH_HARDENING_CONF=/etc/ssh/sshd_config.d/00-vpn-hardening.conf
 ASSUME_YES=false
 
+# Commands of this server's ROLE only (all of them before there is a .env)
 usage() {
+  local role
+  role=$(sed -n 's/^ROLE=//p' "$ENV_FILE" 2>/dev/null | tail -1)
   cat <<'EOF'
 Usage: ./vpn.sh <command> [args]
 
@@ -40,6 +43,8 @@ Setup:
   firewall [--dry-run]    enable ufw for ssh, VPN ports and other listening
                           services, optionally disable SSH password login
 
+EOF
+  [[ $role == exit ]] || cat <<'EOF'
 Users (hub):
   user add NAME [--group G] [--route R]
                           add a user and print their links
@@ -65,12 +70,16 @@ Routes (hub): where traffic that isn't RU leaves; RU always leaves from the hub
   route list              who leaves through which route
                           Routes: local (this hub), none (no internet but RU), EXIT/IPNAME
 
+EOF
+  [[ ${role:-exit} != exit ]] || cat <<'EOF'
 Hubs (ROLE=exit):
   hub add NAME            let hub NAME use this exit, print the token for it
   hub token NAME          print the token again (with egress IPs added since)
   hub del NAME            remove a hub, it can't connect anymore
   hub list                list hubs
 
+EOF
+  cat <<'EOF'
 Maintenance:
   update images           upgrade sing-box / caddy images to the latest releases
   update rules            download the RU lists again (hub; done daily by the timer)

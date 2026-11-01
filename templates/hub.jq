@@ -22,8 +22,8 @@ def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
     {
       type: "vless",
       tag: "vless-in",
-      listen: "::",
-      listen_port: ($ENV.VLESS_PORT | tonumber),
+      listen: $ENV.VLESS_LISTEN_HOST,
+      listen_port: ($ENV.VLESS_LISTEN_PORT | tonumber),
       users: [$users[] | {name, uuid, flow: "xtls-rprx-vision"}],
       tls: {
         enabled: true,

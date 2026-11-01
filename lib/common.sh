@@ -47,8 +47,14 @@ load_env() {
   [[ $ROLE == hub || $ROLE == exit ]] || die "ROLE must be hub or exit, not $ROLE"
   # caddy is in the "hub" compose profile
   export COMPOSE_PROFILES=$ROLE
+  # VLESS_LISTEN=[host:]port, by default all addresses on VLESS_PORT
+  local listen=${VLESS_LISTEN:-$VLESS_PORT} host
+  [[ $listen == *:* ]] || listen=":::$listen"
+  host=${listen%:*}
+  host=${host#[}
+  export VLESS_LISTEN_HOST=${host%]} VLESS_LISTEN_PORT=${listen##*:}
   REALITY_TARGET=${REALITY_TARGET:-$REALITY_SNI:443}
-  local host=${REALITY_TARGET%:*}
+  host=${REALITY_TARGET%:*}
   host=${host#[}
   export REALITY_TARGET_HOST=${host%]} REALITY_TARGET_PORT=${REALITY_TARGET##*:}
   # caddy's certificate for DOMAIN: on the host and in the sing-box container
