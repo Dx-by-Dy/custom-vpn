@@ -244,6 +244,138 @@ cmd_import() {
   cmd_publish
 }
 
+# --- control: what the system looks like -------------------------------------
+
+# Version of head.DOMAIN through RESOLVER, or "-"
+head_version() {
+  local h
+  h=$(dns_txt "head.$1" "$2")
+  [[ $h =~ ^cvpn1\ v=([0-9]+)\  ]] && echo "${BASH_REMATCH[1]}" || echo -
+}
+
+# control dns: the control domains in the order hubs read them, their zones,
+# what their name servers and the public resolvers give
+cmd_control_dns() {
+  local d zone ns r line version
+  dns_enabled || { echo "No CONTROL_DOMAIN: snapshots go to hubs by ssh only (./vpn.sh hub control apply)"; return; }
+  dns_settings
+  need_dig
+  dns_login
+  version=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo -)
+  echo "Published: v$version. Hubs read the domains in this order, through: ${DNS_RESOLVERS_DEFAULT}"
+  printf '%-24s %-20s %s\n' DOMAIN ZONE HEAD
+  for d in $(control_domains); do
+    zone=$(dns_zone_of "$d")
+    line=
+    if [[ -n $zone ]]; then
+      for ns in $(dig +short NS "$zone" | sed 's/\.$//'); do line+="$ns v$(head_version "$d" "$ns"), "; done
+    fi
+    for r in 77.88.8.8 1.1.1.1 8.8.8.8; do line+="$r v$(head_version "$d" "$r"), "; done
+    printf '%-24s %-20s %s\n' "$d" "${zone:-(no such zone in the account)}" "${line%, }"
+  done
+}
+
+# minutes since an ISO time (UTC), or a big number
+mins_since() {
+  local t
+  t=$(date -d "$1" +%s 2>/dev/null) || { echo 999999; return; }
+  echo $((($(date +%s) - t) / 60))
+}
+
+# control check: DNS, every hub (snapshot, DNS, its check, the subscription)
+# and every route on every hub; non-zero exit when something is wrong
+cmd_control_check() {
+  load_env
+  local failed=0 version d zone ns v bad hubs name domain port recipient st status ver ago problems sub token nhubs links
+  local -A routes_bad=() routes_ok=()
+  report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
+  version=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
+
+  if dns_enabled; then
+    dns_settings
+    need_dig
+    if ! (dns_login) >/dev/null 2>&1; then
+      report dns-panel "FAIL: can't log in to $DNS_API as $DNS_USER"
+    else
+      dns_login
+      report dns-panel "ok ($DNS_USER at $DNS_API)"
+      for d in $(control_domains); do
+        zone=$(dns_zone_of "$d")
+        if [[ -z $zone ]]; then
+          report dns "FAIL: $d isn't in any zone of $DNS_USER"
+          continue
+        fi
+        bad=
+        for ns in $(dig +short NS "$zone" | sed 's/\.$//'); do
+          v=$(head_version "$d" "$ns")
+          [[ $v == "$version" ]] || bad+=" $ns has v$v"
+        done
+        if [[ -n $bad ]]; then
+          report dns "FAIL: $d:$bad, published v$version (./vpn.sh control publish)"
+        else
+          report dns "ok ($d: v$version on the name servers of $zone, 77.88.8.8 v$(head_version "$d" 77.88.8.8))"
+        fi
+      done
+    fi
+  else
+    report dns "ok (no CONTROL_DOMAIN: snapshots go by ssh)"
+  fi
+
+  hubs=$(control_hubs_json)
+  nhubs=$(jq length <<<"$hubs")
+  ((nhubs > 0)) || report hubs "FAIL: no hubs (./vpn.sh control hub add)"
+  token=$(users_active | awk '{print $5; exit}')
+  while read -r name domain port recipient; do
+    st=https://$domain:$port/$(status_token "$recipient")/status.json
+    status=$(curl -fsS --noproxy '*' -m 15 "$st" 2>/dev/null || true)
+    if ! jq -e '.v == 1' <<<"$status" >/dev/null 2>&1; then
+      report hub "FAIL: $name: no status at $domain:$port (down, blocked, or its code is older: ./vpn.sh hub update repo there)"
+      continue
+    fi
+    problems=()
+    ver=$(jq -r '.snapshot.version // 0' <<<"$status")
+    # a fresh snapshot takes up to 5 min + DNS_TTL
+    if ((ver < version && $(date +%s) - version > 300 + ${DNS_TTL:-300} + 120)); then
+      problems+=("on v$ver, v$version is out")
+    fi
+    if dns_enabled; then
+      ago=$(mins_since "$(jq -r '.synced // empty' <<<"$status")")
+      ((ago <= 60)) || problems+=("DNS not read for ${ago} min")
+    fi
+    ago=$(mins_since "$(jq -r '.check.at // empty' <<<"$status")")
+    ((ago <= 120)) || problems+=("no check for ${ago} min")
+    while read -r line; do problems+=("$line"); done < <(jq -r '.check.lines[]? | select(test("^\\S+ +FAIL"))' <<<"$status")
+    # routes as this hub sees them
+    while read -r r rest; do
+      if [[ $rest == ok* ]]; then routes_ok[$r]+="$name "; else routes_bad[$r]+="$name "; fi
+    done < <(jq -r '.check.lines[]? | select(startswith("route ")) | sub("^route +"; "") |
+      if test("^ok") then (capture("\\((?<r>[^:]+):").r + " ok") else (capture(": (?<r>[^ ]+) ").r // "?") + " " + . end' <<<"$status")
+    # the subscription of one user lists every hub
+    if [[ -n $token ]]; then
+      sub=$(curl -fsS --noproxy '*' -m 15 "https://$domain:$port/$token/sub" 2>/dev/null | base64 -d 2>/dev/null || true)
+      links=$(grep -c '^vless://' <<<"$sub" || true)
+      [[ $links == "$nhubs" ]] || problems+=("its subscription lists $links of $nhubs hubs")
+    fi
+    if ((${#problems[@]})); then
+      report hub "FAIL: $name: $(printf '%s; ' "${problems[@]}" | sed 's/; $//')"
+    else
+      report hub "ok ($name: v$ver, check $(mins_since "$(jq -r '.check.at' <<<"$status")") min ago: $(jq '.check.lines | length' <<<"$status") ok)"
+    fi
+  done < <(jq -r '.[] | "\(.name) \(.domain) \(.sub_port) \(.recipient)"' <<<"$hubs")
+
+  local r
+  for r in $(exit_routes_json | jq -r '.[].name'); do
+    if [[ -n ${routes_bad[$r]:-} ]]; then
+      report route "FAIL: $r doesn't work from ${routes_bad[$r]% } (./vpn.sh hub check there)"
+    elif [[ -n ${routes_ok[$r]:-} ]]; then
+      report route "ok ($r from ${routes_ok[$r]% })"
+    else
+      report route "FAIL: $r: no hub has checked it yet"
+    fi
+  done
+  return $failed
+}
+
 # --- hub under control -------------------------------------------------------
 
 cmd_control() {
@@ -355,6 +487,7 @@ state_apply() {
   chmod 600 "$CONTROL_DIR/state.json"
   echo "$version" >"$CONTROL_DIR/version"
   cmd_up
+  hub_status snapshot "$(jq -cn --argjson v "$version" --arg at "$(date -u +%FT%TZ)" '{version: $v, applied: $at}')"
   info "snapshot v$version from $(jq -r .created <<<"$json") applied"
 }
 
@@ -365,6 +498,29 @@ apply_control_domains() {
   [[ -n $new && -n $(control_domains) && $new != "$(control_domains_line)" ]] || return 0
   set_var CONTROL_DOMAIN "$new"
   info "control's snapshots come from $new now"
+}
+
+# --- a managed hub's status, read by `control check` -------------------------
+# https://DOMAIN:SUB_PORT/<status token>/status.json: the snapshot applied, when
+# DNS was read, the last `check`. The token comes from the hub's age recipient,
+# which only this hub and control know; the file is served like the subscriptions.
+status_token() { printf 'cvpn-status\n%s' "$1" | sha256sum | cut -c1-32; }
+
+hub_status_token() {
+  [[ -f $CONTROL_DIR/age.key ]] || return 1
+  status_token "$(age-keygen -y "$CONTROL_DIR/age.key")"
+}
+
+# hub_status KEY JSON: set .KEY of this hub's status.json
+hub_status() {
+  local token dir
+  managed && token=$(hub_status_token) || return 0
+  dir=$OUT/sub/$token
+  mkdir -p "$dir"
+  { [[ -s $dir/status.json ]] && cat "$dir/status.json" || echo '{}'; } |
+    jq -c --arg k "$1" --argjson val "$2" --arg hub "$HUB_NAME" '. + {v: 1, hub: $hub} + {($k): $val}' >"$dir/status.json.tmp"
+  chmod 644 "$dir/status.json.tmp"
+  mv "$dir/status.json.tmp" "$dir/status.json"
 }
 
 # check on a managed hub; uses report from cmd_check

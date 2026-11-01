@@ -235,9 +235,13 @@ hy2_wait_cert() {
 
 # Health check for people and for vpn-maintenance.timer (non-zero exit = problem)
 cmd_check() {
+  if [[ $(env_role) == control ]]; then
+    cmd_control_check
+    return
+  fi
   load_env
-  local failed=0 svc running services=sing-box
-  report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
+  local failed=0 svc running services=sing-box lines=()
+  report() { printf '%-12s %s\n' "$1" "$2"; lines+=("$1 $2"); [[ $2 == ok* ]] || failed=1; }
 
   [[ $ROLE != hub ]] || services+=" caddy"
   running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
@@ -271,6 +275,9 @@ cmd_check() {
     fi
   fi
   if [[ $ROLE == hub ]]; then check_routes; else check_egress; fi
+  # for `control check`
+  [[ $ROLE != hub ]] || hub_status check "$(printf '%s\n' "${lines[@]}" |
+    jq -Rn --arg at "$(date -u +%FT%TZ)" --argjson failed "$failed" '{at: $at, failed: ($failed == 1), lines: [inputs]}')"
   return $failed
 }
 

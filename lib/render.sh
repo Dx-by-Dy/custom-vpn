@@ -199,6 +199,8 @@ cmd_render() {
     done
     tokens+="$token "
   done < <(users_active)
+  # the status for `control check` lives there too
+  ! managed || tokens+="$(hub_status_token || true) "
   for dir in "$OUT"/sub/*/; do
     dir=$(basename "$dir")
     [[ $tokens == *" $dir "* ]] || rm -rf "${OUT:?}/sub/$dir"

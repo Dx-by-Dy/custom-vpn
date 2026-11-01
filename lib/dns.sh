@@ -195,6 +195,7 @@ cmd_sync() {
         continue
       fi
       touch "$SYNCED_FILE"
+      hub_status synced "\"$(date -u +%FT%TZ)\""
       state_apply - <<<"$line"
       return
     done
@@ -202,6 +203,7 @@ cmd_sync() {
   $answered || die "can't read head.{$(control_domains_line | tr ' ' ,)} through any of: ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}"
   ((newest <= applied)) || die "v$newest is in DNS, but no resolver gave all its pieces"
   touch "$SYNCED_FILE"
+  hub_status synced "\"$(date -u +%FT%TZ)\""
   info "up to date: v$applied"
 }
 

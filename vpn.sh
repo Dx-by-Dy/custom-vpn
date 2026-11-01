@@ -65,6 +65,9 @@ signed snapshot (DNS, CONTROL_DOMAIN in .env); hubs apply it within minutes.
   ./vpn.sh control hub token NAME           print that token again
   ./vpn.sh control hub del NAME             the hub can't read new snapshots
   ./vpn.sh control hub list
+  ./vpn.sh control check                    the whole system: DNS, every hub (snapshot, DNS,
+                                            its own check, subscription), every route
+  ./vpn.sh control dns                      the control domains: zones, what DNS gives
   ./vpn.sh control publish                  build and publish the snapshot again
   ./vpn.sh control import FILE              users of a stand-alone hub (`hub control export`)
   ./vpn.sh control prune                    drop expired credentials, publish
@@ -187,7 +190,7 @@ esac
 case $(env_role) in
   control)
     case $cmd in
-      init | user | links | rotate | prune | exit | group | route | hub | publish | import | up | help | -h | --help) ;;
+      init | user | links | rotate | prune | exit | group | route | hub | publish | import | up | check | dns | help | -h | --help) ;;
       *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
     esac
     ;;
@@ -216,6 +219,7 @@ case $cmd in
   control) cmd_control "$@" ;;
   state) cmd_state "$@" ;;
   sync) cmd_sync ;;
+  dns) require_role control dns; cmd_control_dns ;;
   publish) require_role control publish; cmd_publish ;;
   import) cmd_import "$@" ;;
   links) cmd_links "$@" ;;
