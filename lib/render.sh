@@ -8,18 +8,76 @@ host_ips_json() {
     awk '{split($4, a, "/"); print a[1] (index(a[1], ":") ? "/128" : "/32")}' | jq -Rn '[inputs]'
 }
 
-# Valid credentials with the user's route as JSON for the sing-box template
+# "user route,route..." of every active user (routes that exist, else none)
+user_route_lines() { user_routes_json | jq -r 'to_entries[] | "\(.key) \(.value | join(","))"'; }
+
+# Valid credentials as JSON for the sing-box template: one entry per credential
+# and route of its user, {name, uuid, hy2, route}. The first route uses the
+# credential itself, the others route_cred of it (named "name@route")
 users_json() {
-  users_valid | jq -Rn --argjson routes "$(user_routes_json)" '[inputs | [splits("[ \t]+")] | {
-    name: (if .[5] == "-" then .[0] else .[0] + "~" + .[5] end),
-    uuid: .[1],
-    hy2: (.[2] + ":" + .[3]),
-    route: ($routes[.[0]] // "none")
-  }]'
+  local name uuid hy_user hy_pass token exp n r i list=() cred=()
+  local -A routes=()
+  while read -r name r; do routes[$name]=$r; done < <(user_route_lines)
+  while read -r name uuid hy_user hy_pass token exp; do
+    [[ $exp == - ]] && n=$name || n=$name~$exp
+    IFS=, read -ra list <<<"${routes[$name]:-none}"
+    for i in "${!list[@]}"; do
+      r=${list[i]}
+      if ((i == 0)); then
+        echo "$n $uuid $hy_user:$hy_pass $r"
+      else
+        read -ra cred < <(route_cred "$uuid" "$hy_user" "$hy_pass" "$r")
+        echo "$n@$r ${cred[0]} ${cred[1]}:${cred[2]} $r"
+      fi
+    done
+  done < <(users_valid) | jq -Rn '[inputs | split(" ") | {name: .[0], uuid: .[1], hy2: .[2], route: .[3]}]'
 }
 
 # hysteria needs caddy's certificate; without it sing-box runs VLESS only
 HY2=false
+
+# Caddyfile headers of the route subscriptions /<token>/<route>/sub: the app
+# shows each as a profile "SUB_NAME · route"
+sub_route_headers() {
+  local r i=0
+  while read -r r; do
+    i=$((i + 1))
+    printf '\t@route%d path_regexp ^/[0-9a-f]+/%s/sub$\n' "$i" "$(route_slug "$r" | sed 's/\./\\./g')"
+    printf '\theader @route%d {\n\t\tContent-Type "text/plain; charset=utf-8"\n\t\tCache-Control no-store\n' "$i"
+    printf '\t\tprofile-title "base64:%s"\n\t\tprofile-update-interval 12\n\t}\n' "$(printf '%s · %s' "$SUB_NAME" "$r" | base64 -w0)"
+  done < <(route_names)
+}
+
+# sub_page_buttons URL NAME: import buttons of one subscription
+sub_page_buttons() {
+  local url=$1 enc name
+  enc=$(urlencode "$1")
+  name=$(urlencode "$2")
+  cat <<EOF
+  <a class="btn" href="hiddify://import/$url#$name">Hiddify <span>Android, iOS, PC</span></a>
+  <a class="btn" href="sn://subscription?url=$enc&amp;name=$name">NekoBox <span>Android</span></a>
+  <a class="btn" href="v2box://install-sub?url=$enc&amp;name=$name">V2Box <span>iOS, macOS</span></a>
+  <button data-url="$url">Скопировать ссылку <span>для других приложений</span></button>
+  <code>$url</code>
+EOF
+}
+
+# sub_page_body TOKEN ROUTE...: the import page: one subscription, or one per route
+sub_page_body() {
+  local token=$1 r first=true
+  shift
+  if (($# == 1)); then
+    echo '  <p>Нажми на свое приложение — подписка добавится сама.</p>'
+    sub_page_buttons "$SUB_URL" "$SUB_NAME"
+    return
+  fi
+  echo '  <p>Каждый выход — отдельная подписка: добавь нужные и переключайся между ними в приложении.</p>'
+  for r in "$@"; do
+    if $first; then echo "  <h2>$r <span>основной</span></h2>"; else echo "  <h2>$r</h2>"; fi
+    first=false
+    sub_page_buttons "https://$DOMAIN:$SUB_PORT/$token/$(route_slug "$r")/sub" "$SUB_NAME · $r"
+  done
+}
 
 # What clients need to connect to this hub (also in `control join`'s token)
 hub_info_json() {
@@ -38,19 +96,20 @@ sub_hubs_json() {
   hub_info_json | jq -c --arg name "${HUB_NAME:-hub}" --argjson others "$others" '[{name: $name} + .] + $others'
 }
 
-# sub_links UUID HY_USER HY_PASS: the user's links for client apps on every hub
-# of SUB_HUBS (one hub: names as before, "SUB_NAME-reality")
+# sub_links UUID HY_USER HY_PASS [LABEL]: the user's links for client apps on
+# every hub of SUB_HUBS, named LABEL-HUB-reality / -hy2 (LABEL: SUB_NAME; one
+# hub: LABEL-reality, as before)
 sub_links() {
-  jq -r --arg uuid "$1" --arg hy "$2:$3" --arg sub "$SUB_NAME" '
+  jq -r --arg uuid "$1" --arg hy "$2:$3" --arg sub "${4:-$SUB_NAME}" '
     (length > 1) as $many | .[] |
     ($sub + (if $many then "-" + .name else "" end)) as $label |
     "vless://\($uuid)@\(.domain):\(.vless_port)?encryption=none&flow=xtls-rprx-vision&security=reality&sni=\(.sni)&fp=chrome&pbk=\(.public_key)&sid=\(.short_id)&type=tcp#\($label + "-reality" | @uri)",
     "hysteria2://\($hy)@\(.domain):\(.hysteria_port)/?sni=\(.domain)#\($label + "-hy2" | @uri)"' <<<"$SUB_HUBS"
 }
 
-# sub_outbounds UUID HY_USER HY_PASS: the same as sing-box outbounds (for ROLE=client)
+# sub_outbounds UUID HY_USER HY_PASS [LABEL]: the same as sing-box outbounds (for ROLE=client)
 sub_outbounds() {
-  jq --arg uuid "$1" --arg hy "$2:$3" --arg sub "$SUB_NAME" '
+  jq --arg uuid "$1" --arg hy "$2:$3" --arg sub "${4:-$SUB_NAME}" '
     {v: 1, name: $sub, outbounds: [.[] | {
       type: "vless",
       tag: (.name + "-reality"),
@@ -100,21 +159,46 @@ cmd_render() {
   render_jq templates/hub.jq "$OUT/sing-box.json" sing-box \
     --argjson users "$(users_json)" --argjson routes "$(exit_routes_json)" \
     --argjson rule_sets "$(rule_sets_json)" --argjson host_ips "$(host_ips_json)" --argjson hy2 "$HY2"
+  SUB_ROUTE_HEADERS=$(sub_route_headers)
   render_file templates/Caddyfile "$OUT/Caddyfile" caddy
 
-  # Per-user subscription (every hub), sing-box outbounds and import page; drop
-  # pages of removed users
-  local name uuid hy_user hy_pass token exp tokens=" "
+  # Per user: a subscription of every route (every hub, /<token>/<route>/sub and
+  # sing-box.json), the first route also at /<token>/sub, and the import page;
+  # drop pages of removed users and routes
+  local name uuid hy_user hy_pass token exp tokens=" " r i slug label keep links obs list=() cred=() dir
+  local -A routes=()
+  while read -r name r; do routes[$name]=$r; done < <(user_route_lines)
   SUB_HUBS=$(sub_hubs_json)
   while read -r name uuid hy_user hy_pass token exp; do
+    IFS=, read -ra list <<<"${routes[$name]:-none}"
     user_vars "$uuid" "$hy_user" "$hy_pass" "$token"
     mkdir -p "$OUT/sub/$token"
+    SUB_BODY=$(sub_page_body "$token" "${list[@]}")
     render_file templates/sub.html "$OUT/sub/$token/index.html"
-    write_file "$OUT/sub/$token/sub" "$(sub_links "$uuid" "$hy_user" "$hy_pass" | base64 -w0)"
-    write_file "$OUT/sub/$token/sing-box.json" "$(sub_outbounds "$uuid" "$hy_user" "$hy_pass")"
+    keep=" "
+    for i in "${!list[@]}"; do
+      r=${list[i]} slug=$(route_slug "${list[i]}")
+      if ((i == 0)); then cred=("$uuid" "$hy_user" "$hy_pass"); else read -ra cred < <(route_cred "$uuid" "$hy_user" "$hy_pass" "$r"); fi
+      label=$SUB_NAME
+      ((${#list[@]} == 1)) || label="$SUB_NAME $r"
+      links=$(sub_links "${cred[@]}" "$label" | base64 -w0)
+      obs=$(sub_outbounds "${cred[@]}" "$label")
+      if ((i == 0)); then
+        write_file "$OUT/sub/$token/sub" "$links"
+        write_file "$OUT/sub/$token/sing-box.json" "$obs"
+      fi
+      mkdir -p "$OUT/sub/$token/$slug"
+      write_file "$OUT/sub/$token/$slug/sub" "$links"
+      write_file "$OUT/sub/$token/$slug/sing-box.json" "$obs"
+      keep+="$slug "
+    done
+    for dir in "$OUT/sub/$token"/*/; do
+      [[ -d $dir ]] || continue
+      dir=$(basename "$dir")
+      [[ $keep == *" $dir "* ]] || rm -rf "${OUT:?}/sub/$token/$dir"
+    done
     tokens+="$token "
   done < <(users_active)
-  local dir
   for dir in "$OUT"/sub/*/; do
     dir=$(basename "$dir")
     [[ $tokens == *" $dir "* ]] || rm -rf "${OUT:?}/sub/$dir"

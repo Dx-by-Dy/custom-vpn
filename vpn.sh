@@ -42,20 +42,23 @@ signed snapshot (DNS, CONTROL_DOMAIN in .env); hubs apply it within minutes.
   ./vpn.sh control user add NAME [--group G] [--route R]
   ./vpn.sh control user del NAME            the user's keys stop working on every hub
   ./vpn.sh control user list
-  ./vpn.sh control user route NAME ROUTE|-  the user's own route (- : the group's or ROUTE_DEFAULT)
+  ./vpn.sh control user route NAME ROUTE[,ROUTE...]|-
+                                            the user's own routes, picked in the app; the first is
+                                            the main one (- : the group's or ROUTE_DEFAULT)
   ./vpn.sh control user group NAME GROUP|-  put the user into a group (- : no group)
-  ./vpn.sh control user links [NAME]        subscription links on every hub
+  ./vpn.sh control user links [NAME]        subscription links on every hub (one per route)
   ./vpn.sh control user rotate NAME|--all [--grace HOURS]
                                             new keys; the old ones work HOURS more (24)
-  ./vpn.sh control group add NAME [ROUTE]   a group of users with a common route
-  ./vpn.sh control group route NAME ROUTE|- (- : ROUTE_DEFAULT)
+  ./vpn.sh control group add NAME [ROUTE[,ROUTE...]]
+                                            a group of users with common routes
+  ./vpn.sh control group route NAME ROUTE[,ROUTE...]|-   (- : ROUTE_DEFAULT)
   ./vpn.sh control group del NAME           (an empty one)
   ./vpn.sh control group list
   ./vpn.sh control exit add NAME TOKEN      an exit from `./vpn.sh exit hub add` there;
                                             its IPs become routes NAME/IPNAME
   ./vpn.sh control exit del NAME
   ./vpn.sh control exit list
-  ./vpn.sh control route list               who leaves through which route
+  ./vpn.sh control route list               who leaves through which routes
                                             (local, none = RU only, EXIT/IPNAME)
   ./vpn.sh control hub add NAME TOKEN       a hub from `./vpn.sh hub control join` there;
                                             prints the token for `hub control set`

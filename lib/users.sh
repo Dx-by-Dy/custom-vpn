@@ -62,7 +62,7 @@ cmd_user() {
       [[ -z $group$route ]] || routing_set "$name" "${group:--}" "${route:--}"
       cmd_up
       cmd_links "$name"
-      user_routes | awk -v n="$name" '$1 == n {print "  route:         " ($4 == "missing" ? "none" : $3) " (" $4 ")"}'
+      user_routes | awk -v n="$name" '$1 == n {print "  routes:        " $3 " (" $4 ($5 != "-" ? "; " $5 " does not exist" : "") ")"}'
       ;;
     del)
       check_name "$name" "user name"
@@ -80,7 +80,7 @@ cmd_user() {
       check_route "$route" dash-ok
       routing_set "$name" "" "$route"
       cmd_up
-      user_routes | awk -v n="$name" '$1 == n {print ">> " n " leaves through " ($4 == "missing" ? "none" : $3) " (" $4 ")"}'
+      user_routes | awk -v n="$name" '$1 == n {print ">> " n " leaves through " $3 " (" $4 ($5 != "-" ? "; " $5 " does not exist" : "") ")"}'
       ;;
     group)
       check_name "$name" "user name"
@@ -90,7 +90,7 @@ cmd_user() {
       [[ $group == - ]] || group_exists "$group" || die "no group $group ($(vsh group add "$group") ROUTE)"
       routing_set "$name" "$group" ""
       cmd_up
-      user_routes | awk -v n="$name" '$1 == n {print ">> " n " leaves through " ($4 == "missing" ? "none" : $3) " (" $4 ")"}'
+      user_routes | awk -v n="$name" '$1 == n {print ">> " n " leaves through " $3 " (" $4 ($5 != "-" ? "; " $5 " does not exist" : "") ")"}'
       ;;
     list)
       [[ -f $USERS_FILE ]] || die "no users yet, run: $(vsh init)"
@@ -189,6 +189,7 @@ cmd_links() {
     echo "[$name]"
     echo "  import page:   $SUB_PAGE"
     echo "  subscription:  $SUB_URL"
+    user_route_subs "$name" "https://$DOMAIN:$SUB_PORT/$token/" "  "
     if [[ -n $only ]]; then
       echo "  vless:         $VLESS_LINK"
       echo "  hysteria2:     $HY2_LINK"

@@ -7,7 +7,7 @@
 # The client takes them from the first of CLIENT_SUB that answers, keeps a copy
 # (and keeps working on it when no hub answers) and uses the fastest hub
 # (urltest). Where traffic leaves is up to the hub: RU from the hub, the rest
-# by the user's route.
+# by the user's route; of a user with several, the first, or CLIENT_ROUTE.
 CLIENT_DIR=data/client
 CLIENT_SUB_FILE=$CLIENT_DIR/sub.json
 # check fails when the subscription couldn't be refreshed for that long
@@ -27,7 +27,7 @@ CLIENT_SUB_CHANGED=false
 client_fetch() {
   local url got
   for url in $(client_subs); do
-    got=$(curl -fsS -m 20 "$(client_sub_base "$url")sing-box.json" 2>/dev/null) || continue
+    got=$(curl -fsS -m 20 "$(client_sub_base "$url")${CLIENT_ROUTE:+$(route_slug "$CLIENT_ROUTE")/}sing-box.json" 2>/dev/null) || continue
     jq -e '.v == 1 and (.outbounds | length > 0)' <<<"$got" >/dev/null 2>&1 || continue
     mkdir -p "$CLIENT_DIR"
     chmod 700 "$CLIENT_DIR"
@@ -74,7 +74,7 @@ check_client() {
   if [[ -s $CLIENT_SUB_FILE ]]; then
     age=$(($(date +%s) - $(date -r "$CLIENT_SUB_FILE" +%s)))
     if ((age <= CLIENT_SUB_MAX_AGE)); then
-      report subscription "ok ($(jq -r '[.outbounds[].server] | unique | join(" ")' "$CLIENT_SUB_FILE"), refreshed $((age / 3600))h ago)"
+      report subscription "ok (${CLIENT_ROUTE:-the main route} via $(jq -r '[.outbounds[].server] | unique | join(" ")' "$CLIENT_SUB_FILE"), refreshed $((age / 3600))h ago)"
     else
       report subscription "FAIL: not refreshed for $((age / 3600))h (CLIENT_SUB unreachable?)"
     fi

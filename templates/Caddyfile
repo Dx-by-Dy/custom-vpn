@@ -21,7 +21,8 @@ http:// {
 	respond 404
 }
 
-# Per-user subscription for client apps: /<token>/sub, import page: /<token>/
+# Per-user subscription for client apps: /<token>/sub (the main route) and
+# /<token>/<route>/sub (each route of the user), import page: /<token>/
 ${DOMAIN}:${SUB_PORT} {
 	header -Server
 	@sub path_regexp ^/[0-9a-f]+/sub$
@@ -31,6 +32,7 @@ ${DOMAIN}:${SUB_PORT} {
 		profile-title "base64:${SUB_TITLE_B64}"
 		profile-update-interval 12
 	}
+${SUB_ROUTE_HEADERS}
 	root * /srv
 	file_server
 }

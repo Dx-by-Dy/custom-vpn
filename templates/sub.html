@@ -20,27 +20,25 @@
     text-align: left; text-decoration: none; cursor: pointer; }
   a.btn:hover, button:hover { border-color: var(--accent); }
   a.btn span, button span { float: right; color: var(--muted); font-weight: 400; }
-  code { display: block; margin-top: 24px; padding: 12px; border-radius: 8px; background: var(--card);
+  h2 { font-size: 16px; margin: 28px 0 10px; }
+  h2 span { color: var(--muted); font-weight: 400; font-size: 13px; }
+  code { display: block; margin: 0 0 8px; padding: 12px; border-radius: 8px; background: var(--card);
     border: 1px solid var(--border); font-size: 12px; word-break: break-all; }
 </style>
 </head>
 <body>
 <main>
   <h1>${SUB_NAME}</h1>
-  <p>Нажми на свое приложение — подписка добавится сама.</p>
-  <a class="btn" href="hiddify://import/${SUB_URL}#${SUB_NAME_ENC}">Hiddify <span>Android, iOS, PC</span></a>
-  <a class="btn" href="sn://subscription?url=${SUB_URL_ENC}&amp;name=${SUB_NAME_ENC}">NekoBox <span>Android</span></a>
-  <a class="btn" href="v2box://install-sub?url=${SUB_URL_ENC}&amp;name=${SUB_NAME_ENC}">V2Box <span>iOS, macOS</span></a>
-  <button id="copy">Скопировать ссылку <span>для других приложений</span></button>
-  <code id="url">${SUB_URL}</code>
+${SUB_BODY}
 </main>
 <script>
-  document.getElementById("copy").onclick = function () {
-    var btn = this;
-    navigator.clipboard.writeText(document.getElementById("url").textContent).then(function () {
-      btn.firstChild.textContent = "Скопировано ";
-    });
-  };
+  document.querySelectorAll("button[data-url]").forEach(function (btn) {
+    btn.onclick = function () {
+      navigator.clipboard.writeText(btn.dataset.url).then(function () {
+        btn.firstChild.textContent = "Скопировано ";
+      });
+    };
+  });
 </script>
 </body>
 </html>

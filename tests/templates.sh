@@ -6,9 +6,10 @@
 #
 #   tests/templates.sh                               # this host's jq + jq 1.7.1
 #   JQ_IMAGES="ghcr.io/jqlang/jq:1.7.1 ghcr.io/jqlang/jq:1.8.1" tests/templates.sh
+#   KEEP=1 tests/templates.sh                        # keep the rendered fixtures to look at
 #
 # Roles: a stand-alone hub (users, a rotated credential, a group, routes via an
-# exit, hysteria with a certificate), an exit, a client, and control publishing
+# exit, users with several routes, hysteria with a certificate), an exit, a client, and control publishing
 # a snapshot that a second hub applies (its subscription then lists two hubs).
 # Needs docker or podman (DOCKER=podman), the sing-box and caddy images of
 # .env.example, age, ssh-keygen and openssl. No network: everything is local.
@@ -23,7 +24,7 @@ for c in "$DOCKER" jq age age-keygen ssh-keygen openssl; do
 done
 
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+trap 'if [[ -n ${KEEP:-} ]]; then echo "kept $WORK"; else rm -rf "$WORK"; fi' EXIT
 mkdir -p "$WORK/bin" "$WORK/tmp"
 export TMPDIR=$WORK/tmp
 SINGBOX_IMAGE=$(sed -n 's/^SINGBOX_IMAGE=//p' .env.example)
@@ -100,8 +101,9 @@ fixture "$BASE/hub" hub hub.test
 setenv "$BASE/hub/.env" ROUTE_DEFAULT local
 printf '%s\n' "$USERS" >"$BASE/hub/users.conf"
 printf '# exit  token\ncz1 %s\n' "$EXIT_TOKEN" >"$BASE/hub/exits.conf"
-printf '# group  route\nsales cz1/ip1\n' >"$BASE/hub/groups.conf"
-printf '# user  group  route\nalice sales -\nbob - none\n' >"$BASE/hub/routing.conf"
+# several routes: alice from her group, carol her own (the first is the main one)
+printf '# group  route\nsales cz1/ip1,local\n' >"$BASE/hub/groups.conf"
+printf '# user  group  route\nalice sales -\nbob - none\ncarol - none,cz1/ip1\n' >"$BASE/hub/routing.conf"
 
 # Control with the same scheme, a fake second hub and a real one (hub2)
 fixture "$BASE/control" control
@@ -120,6 +122,24 @@ printf '# hub  token\nhubx %s\n' "$HUBX_TOKEN" >"$BASE/control/hubs.conf"
 fixture "$BASE/client" client
 setenv "$BASE/client/.env" CLIENT_SUB '"http://127.0.0.1:9/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1/sub"'
 
+# What the hub's config must have (checked with this host's jq): a key per
+# credential and route (alice 2, bob 1 + 1 rotated, carol 2), a subscription per
+# route, a profile title per route in the Caddyfile
+expect_hub() {
+  local h=$1/generated
+  [[ $(jq '[.inbounds[] | select(.type == "vless") | .users[]] | length' "$h/sing-box.json") == 6 ]] ||
+    fail "vless users: $(jq -c '[.inbounds[] | select(.type == "vless") | .users[].name]' "$h/sing-box.json")"
+  jq -e '.route.rules | any(.auth_user? // [] | index("carol@cz1/ip1")) and any(.auth_user? // [] | index("alice@local"))' \
+    "$h/sing-box.json" >/dev/null || fail "no rules for the second routes of carol / alice"
+  for f in sub sing-box.json none/sub cz1-ip1/sub cz1-ip1/sing-box.json; do
+    [[ -s $h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/$f ]] || fail "carol has no $f"
+  done
+  [[ ! -e $h/sub/b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2/cz1-ip1 ]] || fail "bob has a route he doesn't have"
+  cmp -s "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/sub" "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/none/sub" ||
+    fail "carol's main subscription isn't her first route"
+  [[ $(grep -c 'profile-title' "$h/Caddyfile") -ge 4 ]] || fail "no profile titles of the routes in the Caddyfile"
+}
+
 # run VARIANT JQ_BIN_DIR: render everything with that jq, list "sha256 file"
 run() {
   local name=$1 bin=$2 dir=$WORK/$1 ctl
@@ -127,6 +147,7 @@ run() {
   cp -a "$BASE" "$dir"
   step "$name: $(cd "$WORK" && PATH="$bin:$PATH" jq --version)"
   vpn "$dir/hub" "$bin" hub render >"$dir/hub.log" 2>&1 || { cat "$dir/hub.log"; fail "$name: hub render"; }
+  expect_hub "$dir/hub"
   vpn "$dir/exit" "$bin" exit render >"$dir/exit.log" 2>&1 || { cat "$dir/exit.log"; fail "$name: exit render"; }
   mkdir -p "$dir/client/data/client"
   cp "$dir/hub/generated/sub/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1/sing-box.json" "$dir/client/data/client/sub.json"

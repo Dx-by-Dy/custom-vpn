@@ -6,13 +6,17 @@
 #   local        from this hub
 #   none         nowhere: only RU works (fail-closed)
 #   EXIT/IPNAME  through exit EXIT from its egress IP named IPNAME
-# A user's route: their own, else their group's, else ROUTE_DEFAULT. A route
-# that doesn't exist (exit removed, IP renamed) counts as none: there is no
-# silent fallback to another IP.
+# A user's routes: their own, else their group's, else ROUTE_DEFAULT. Each of
+# these is a list, ROUTE[,ROUTE...]: the user picks one in the app, every route
+# being a subscription of its own (/<token>/<route>/sub), the first also the
+# main one (/<token>/sub). Each route has its own credentials (route_cred), so
+# the hub knows the route from the key and a route outside the list can't be
+# used. A route that doesn't exist (exit removed, IP renamed) gets no
+# credentials: there is no silent fallback to another IP.
 #
-# exits.conf:   exit  token          (the token `hub add` printed on the exit)
-# groups.conf:  group  route         (route "-": ROUTE_DEFAULT)
-# routing.conf: user  group  route   ("-": no group / no route of their own)
+# exits.conf:   exit  token          (the token `exit hub add` printed on the exit)
+# groups.conf:  group  routes        (routes "-": ROUTE_DEFAULT)
+# routing.conf: user  group  routes  ("-": no group / no routes of their own)
 EXITS_FILE=exits.conf
 EXITS_HEADER='# exit  token'
 GROUPS_FILE=groups.conf
@@ -65,9 +69,48 @@ route_names() {
 route_exists() { [[ $'\n'$(route_names)$'\n' == *$'\n'"$1"$'\n'* ]]; }
 
 # Die unless ROUTE can be assigned ("-" too, if allowed)
+# check_route ROUTE[,ROUTE...] [dash-ok]: every route of the list exists, none twice
 check_route() {
   [[ $1 == - && ${2:-} == dash-ok ]] && return
-  route_exists "$1" || die "no route $1; routes: $(route_names | paste -sd' ')"
+  local r seen=" " list=()
+  [[ -n $1 ]] || die "no route given; routes: $(route_names | paste -sd' ')"
+  IFS=, read -ra list <<<"$1,"
+  for r in "${list[@]}"; do
+    route_exists "$r" || die "no route ${r:-(empty)}; routes: $(route_names | paste -sd' ')"
+    [[ $seen != *" $r "* ]] || die "route $r is in the list twice"
+    seen+="$r "
+  done
+}
+
+# Routes of a list that don't exist, comma-separated
+routes_missing() {
+  local r out=() list=()
+  IFS=, read -ra list <<<"$1,"
+  for r in "${list[@]}"; do route_exists "$r" || out+=("$r"); done
+  (IFS=,; echo "${out[*]}")
+}
+
+# user_route_subs USER BASE_URL INDENT: the subscription of each route of a
+# user with several (printed by `user links`)
+user_route_subs() {
+  local list r
+  list=$(user_route_lines | awk -v u="$1" '$1 == u {print $2}')
+  [[ $list == *,* ]] || return 0
+  echo "${3}a subscription per route (the app shows each as a profile; the first is the main one):"
+  for r in ${list//,/ }; do printf '%s  %-14s %s%s/sub\n' "$3" "$r" "$2" "$(route_slug "$r")"; done
+}
+
+# A route in paths and file names: cz1/ip1 -> cz1-ip1
+route_slug() { echo "${1//\//-}"; }
+
+# route_cred UUID HY_USER HY_PASS ROUTE: "uuid hysteria_user hysteria_pass" of the
+# user's key for a route other than their first: derived from their own key, so
+# it changes with `user rotate` and needs no storage
+route_cred() {
+  local u p
+  u=$(printf 'cvpn-route\n%s\n%s' "$1" "$4" | sha256sum)
+  p=$(printf 'cvpn-route-hy2\n%s\n%s' "$3" "$4" | sha256sum)
+  echo "${u:0:8}-${u:8:4}-4${u:13:3}-8${u:17:3}-${u:20:12} $2+$(route_slug "$4") ${p:0:32}"
 }
 
 # --- who leaves where --------------------------------------------------------
@@ -86,16 +129,19 @@ user_routes() {
       if (uroute[u] != "" && uroute[u] != "-") { route = uroute[u]; from = "user" }
       else if (grp != "-" && groute[grp] != "" && groute[grp] != "-") { route = groute[grp]; from = "group" }
       else { route = def; from = "default" }
-      if (!index(known, " " route " ")) from = "missing"
-      print u, grp, route, from
+      n = split(route, rs, ","); bad = ""
+      for (i = 1; i <= n; i++) if (!index(known, " " rs[i] " ")) bad = bad (bad == "" ? "" : ",") rs[i]
+      print u, grp, route, from, (bad == "" ? "-" : bad)
     }' <(conf_rows "$GROUPS_FILE") <(conf_rows "$ROUTING_FILE") <(users_active)
 }
 
 # {user: route} for templates/hub.jq, missing routes as none
 user_routes_json() {
-  route_exists "${ROUTE_DEFAULT:-none}" ||
-    warn "ROUTE_DEFAULT=$ROUTE_DEFAULT doesn't exist: users without a route get no internet but RU"
-  user_routes | jq -Rn '[inputs | split(" ") | {(.[0]): (if .[3] == "missing" then "none" else .[2] end)}] | add // {}'
+  [[ -z $(routes_missing "${ROUTE_DEFAULT:-none}") ]] ||
+    warn "ROUTE_DEFAULT=$ROUTE_DEFAULT: $(routes_missing "${ROUTE_DEFAULT:-none}") doesn't exist, users without a route of their own don't get it"
+  user_routes | jq -Rn '[inputs | split(" ") | (.[4] | split(",")) as $bad
+    | {(.[0]): ([.[2] | split(",")[] | select(. as $r | $bad | all(. != $r))] | if length == 0 then ["none"] else . end)}]
+    | add // {}'
 }
 
 # Set a user's group and/or route in routing.conf; an empty value keeps the current one
@@ -117,7 +163,10 @@ group_exists() { conf_rows "$GROUPS_FILE" | awk -v n="$1" '$1 == n {f = 1} END {
 
 # Users whose route is one of the given ones (space-separated list on one line)
 users_on_routes() {
-  user_routes | awk -v routes=" $* " 'index(routes, " " $3 " ") {printf "%s%s", (n++ ? " " : ""), $1}'
+  user_routes | awk -v routes=" $* " '{
+    n = split($3, rs, ",")
+    for (i = 1; i <= n; i++) if (index(routes, " " rs[i] " ")) { printf "%s%s", (c++ ? " " : ""), $1; break }
+  }'
 }
 
 # --- RU lists ----------------------------------------------------------------
@@ -291,14 +340,15 @@ cmd_route() {
   case ${1:-list} in
     list)
       user_routes | awk -v def="${ROUTE_DEFAULT:-none}" '
-        BEGIN { printf "%-20s %-16s %-20s %s\n", "USER", "GROUP", "ROUTE", "FROM" }
+        BEGIN { printf "%-20s %-16s %-24s %s\n", "USER", "GROUP", "ROUTES", "FROM" }
         {
           why = $4 == "default" ? "ROUTE_DEFAULT" : $4 == "group" ? "group" : "own"
-          if ($4 == "missing") { why = $3 " does not exist"; $3 = "none" }
-          printf "%-20s %-16s %-20s %s\n", $1, $2, $3, why
+          if ($5 != "-") why = why "; " $5 " does not exist"
+          printf "%-20s %-16s %-24s %s\n", $1, $2, $3, why
         }'
       echo
       echo "Routes: $(route_names | paste -sd' ')"
+      echo "Several routes (ROUTE,ROUTE...): the user picks one in the app; the first is the main one."
       if [[ $ROLE == control ]]; then where="always leaves from the hub the user is connected to"; else where="leaves from this hub for everyone"; fi
       echo "RU (.ru .su .рф, Russian services, Russian IPs) $where."
       ;;
@@ -351,7 +401,8 @@ check_routes() {
     ((age <= 7)) && report ru-lists "ok ($tag, ${age}d old)" || report ru-lists "FAIL: $tag is ${age} days old"
   done
 
-  route_exists "${ROUTE_DEFAULT:-none}" || report routes "FAIL: ROUTE_DEFAULT=$ROUTE_DEFAULT doesn't exist"
-  missing=$(user_routes | awk '$4 == "missing" {printf "%s%s -> %s", (n++ ? ", " : ""), $1, $3}')
-  [[ -z $missing ]] || report users "FAIL: routes don't exist, no internet but RU: $missing"
+  [[ -z $(routes_missing "${ROUTE_DEFAULT:-none}") ]] ||
+    report routes "FAIL: ROUTE_DEFAULT=$ROUTE_DEFAULT: $(routes_missing "${ROUTE_DEFAULT:-none}") doesn't exist"
+  missing=$(user_routes | awk '$5 != "-" {printf "%s%s -> %s", (n++ ? ", " : ""), $1, $5}')
+  [[ -z $missing ]] || report users "FAIL: routes don't exist, these users can't use them: $missing"
 }

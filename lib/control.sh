@@ -137,7 +137,7 @@ cmd_publish() {
 
 # Subscription links of a user on every hub (control's `links`)
 control_links() {
-  local only=${1:-} name uuid hy_user hy_pass token exp found=false hubs
+  local only=${1:-} name uuid hy_user hy_pass token exp found=false hubs hub base
   hubs=$(control_hubs_json)
   while read -r name uuid hy_user hy_pass token exp; do
     [[ -z $only || $name == "$only" ]] || continue
@@ -148,7 +148,12 @@ control_links() {
       echo "  no hubs yet: links appear after ./vpn.sh control hub add"
       continue
     fi
-    jq -r --arg t "$token" '.[] | "  \(.name):\n    import page:   https://\(.domain):\(.sub_port)/\($t)/\n    subscription:  https://\(.domain):\(.sub_port)/\($t)/sub"' <<<"$hubs"
+    while read -r hub base; do
+      echo "  $hub:"
+      echo "    import page:   $base"
+      echo "    subscription:  ${base}sub"
+      user_route_subs "$name" "$base" "    "
+    done < <(jq -r --arg t "$token" '.[] | "\(.name) https://\(.domain):\(.sub_port)/\($t)/"' <<<"$hubs")
   done < <(users_active)
   $found || die "no user ${only:-found}"
   echo
