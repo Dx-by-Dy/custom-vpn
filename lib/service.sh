@@ -1,0 +1,222 @@
+# shellcheck shell=bash
+# Ports, starting the containers, health check; sourced by vpn.sh
+
+# REALITY contacts its target on every handshake; sites sometimes block server IPs.
+# Ask the target the way sing-box does: SNI REALITY_SNI at REALITY_TARGET.
+reality_target_ok() {
+  curl -s -o /dev/null -m 8 --connect-to "$REALITY_SNI:443:$REALITY_TARGET" "https://$REALITY_SNI/"
+}
+
+
+# Sockets on non-loopback addresses: "proto port pid process"
+listeners() {
+  ss -Hlntup 2>/dev/null | awk '{
+    port = addr = $5
+    sub(/.*:/, "", port)
+    sub(/:[^:]*$/, "", addr)
+    if (addr ~ /^127\.|^\[::1\]|%lo$/) next
+    pid = proc = "?"
+    if (match($0, /\("[^"]+",pid=[0-9]+/)) {
+      split(substr($0, RSTART + 2, RLENGTH - 2), a, "\",pid=")
+      proc = a[1]; pid = a[2]
+    }
+    print $1, port, pid, proc
+  }' | sort -u
+}
+
+# Host PIDs of this stack's containers
+our_pids() {
+  local ids
+  ids=$("$DOCKER" compose ps -q 2>/dev/null || true)
+  [[ -z $ids ]] || "$DOCKER" inspect -f '{{.State.Pid}}' $ids
+}
+
+# Ports this stack listens on: "port/proto description"
+vpn_ports() {
+  echo "$VLESS_PORT/tcp sing-box (VLESS REALITY)"
+  echo "$HYSTERIA_PORT/udp sing-box (hysteria)"
+  echo "$SUB_PORT/tcp caddy (subscription)"
+  echo "$SUB_PORT/udp caddy (subscription, HTTP/3)"
+  echo "$ACME_HTTP_PORT/tcp caddy (Let's Encrypt HTTP-01)"
+}
+
+# nginx config that hands Let's Encrypt HTTP-01 requests to caddy on ACME_HTTP_PORT
+acme_proxy_snippet() {
+  local port=$ACME_HTTP_PORT
+  [[ $port == 80 ]] && port=8880
+  cat <<EOF
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name $DOMAIN;
+          location /.well-known/acme-challenge/ {
+              proxy_pass http://127.0.0.1:$port;
+              proxy_set_header Host \$host;
+          }
+      }
+EOF
+}
+
+# What to do when a port is taken
+port_hint() {
+  case $1 in
+    "$ACME_HTTP_PORT/tcp")
+      if [[ $ACME_HTTP_PORT == 80 ]]; then
+        echo "    Let's Encrypt only checks port 80. If a web server owns it, keep it there:"
+        echo "    set ACME_HTTP_PORT=8880 in $ENV_FILE and make it pass the checks to caddy, e.g. nginx:"
+        acme_proxy_snippet
+        echo "    (or just the location block inside an existing server for $DOMAIN)"
+      else
+        echo "    set ACME_HTTP_PORT to another free local port and point the port-80 proxy at it"
+      fi
+      ;;
+    "$VLESS_PORT/tcp")
+      echo "    another HTTPS server? Move it or set VLESS_PORT to a free port"
+      echo "    (REALITY off 443 looks less natural, see the README section on port 443)"
+      ;;
+    "$HYSTERIA_PORT/udp")
+      echo "    set HYSTERIA_PORT to any free UDP port; clients get it on the next subscription refresh"
+      ;;
+    "$SUB_PORT/tcp")
+      echo "    set SUB_PORT to a free port; the port is part of subscription links,"
+      echo "    so every user has to import the subscription again"
+      ;;
+  esac
+}
+
+# Fail if a port we need is held by something other than our containers
+check_ports() {
+  local ours all need desc proto port lport pid proc busy=()
+  ours=" $(our_pids | tr '\n' ' ') "
+  all=$(listeners)
+  while read -r need desc; do
+    port=${need%/*} proto=${need#*/}
+    [[ $need == "$SUB_PORT/udp" ]] && continue # optional, caddy works without HTTP/3
+    while read -r p lport pid proc; do
+      [[ $p == "$proto" && $lport == "$port" && $ours != *" $pid "* ]] || continue
+      busy+=("$need is taken by $proc (pid $pid), needed for $desc")
+      busy+=("$(port_hint "$need")")
+      break
+    done <<<"$all"
+  done < <(vpn_ports)
+  ((${#busy[@]} == 0)) && return
+  printf '%s\n' "ports are busy:" "${busy[@]}" >&2
+  if [[ $EUID -ne 0 ]]; then
+    warn "not root, can't see which processes own the ports; continuing"
+    return
+  fi
+  die "nothing started"
+}
+
+# Let's Encrypt validates via http://DOMAIN:80/.well-known/acme-challenge/...; caddy
+# answers "ok" on a secret path there, so we can see that port 80 really reaches it
+# (directly or through a proxy) long before a renewal would fail.
+acme_path_ok() {
+  local i
+  for i in 1 2 3 4 5; do
+    [[ $(curl -s -m 5 --resolve "$DOMAIN:80:127.0.0.1" \
+      "http://$DOMAIN/.well-known/acme-challenge/$ACME_CHECK_TOKEN" 2>/dev/null) == ok ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+acme_path_warning() {
+  warn "port 80 doesn't reach caddy: Let's Encrypt can't renew the certificate for $DOMAIN"
+  if [[ $ACME_HTTP_PORT == 80 ]]; then
+    echo "    caddy should own 80/tcp; see what holds it: ss -ltnp 'sport = :80'" >&2
+  else
+    echo "    the web server on port 80 must pass ACME checks to caddy on $ACME_HTTP_PORT, e.g. nginx:" >&2
+    acme_proxy_snippet >&2
+  fi
+}
+
+preflight() {
+  local resolved public
+  # Repeated ACME failures hit Let's Encrypt rate limits
+  resolved=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
+  public=$(curl -4 -fsS -m 5 https://ifconfig.me 2>/dev/null || true)
+  if [[ -z $resolved ]]; then
+    warn "$DOMAIN doesn't resolve, caddy won't get a certificate"
+  elif [[ -n $public && $resolved != "$public" ]]; then
+    warn "$DOMAIN -> $resolved, but this server is $public"
+  fi
+  reality_target_ok ||
+    warn "this server can't reach $REALITY_TARGET as https://$REALITY_SNI/: VLESS won't work, check REALITY_SNI / REALITY_TARGET"
+  check_ports
+}
+
+cmd_up() {
+  local running restart=() svc
+  running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
+  CHANGED=()
+  cmd_render
+  preflight
+  "$DOCKER" compose up -d --remove-orphans
+  # compose doesn't notice changed config files; restart what was already running
+  for svc in $(printf '%s\n' "${CHANGED[@]}" | sort -u); do
+    grep -qx "$svc" <<<"$running" && restart+=("$svc")
+  done
+  ((${#restart[@]} == 0)) || "$DOCKER" compose restart "${restart[@]}"
+  $HY2 || hy2_wait_cert
+  "$DOCKER" compose ps
+  acme_path_ok || acme_path_warning
+}
+
+# First start: caddy gets the certificate in a minute or so, then hysteria can start
+hy2_wait_cert() {
+  local i
+  info "waiting for caddy to get the certificate for $DOMAIN (hysteria starts after it, VLESS already works)"
+  for ((i = 0; i < 36; i++)); do
+    [[ -s $CERT ]] && break
+    sleep 5
+  done
+  if [[ ! -s $CERT ]]; then
+    warn "no certificate for $DOMAIN yet, hysteria is off; see ./vpn.sh logs, then run ./vpn.sh up"
+    return
+  fi
+  CHANGED=()
+  cmd_render
+  "$DOCKER" compose restart sing-box
+}
+
+# Health check for people and for vpn-maintenance.timer (non-zero exit = problem)
+cmd_check() {
+  load_env
+  local failed=0 svc running days
+  report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
+
+  running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
+  for svc in sing-box caddy; do
+    grep -qx "$svc" <<<"$running" && continue
+    report containers "FAIL: $svc is not running"
+  done
+  [[ $failed == 1 ]] || report containers "ok"
+
+  if [[ ! -f $CERT ]]; then
+    report certificate "FAIL: no certificate yet ($CERT)"
+  elif command -v openssl >/dev/null; then
+    days=$((($(date -d "$(openssl x509 -enddate -noout -in "$CERT" | cut -d= -f2)" +%s) - $(date +%s)) / 86400))
+    # caddy renews 30 days ahead, so less than 14 means renewals have been failing
+    ((days >= 14)) && report certificate "ok ($days days left)" || report certificate "FAIL: expires in $days days"
+  fi
+
+  # Configs rendered before the certificate came have no hysteria
+  if [[ -f $CERT ]] && ! jq -e '.inbounds | any(.type == "hysteria2")' "$OUT/sing-box.json" >/dev/null 2>&1; then
+    report hysteria "FAIL: off (no certificate when configs were rendered), run: ./vpn.sh up"
+  fi
+
+  if acme_path_ok; then
+    report acme "ok (port 80 reaches caddy)"
+  else
+    report acme "FAIL: port 80 doesn't reach caddy, renewals will fail"
+    acme_path_warning 2>&1 | tail -n +2
+  fi
+
+  if reality_target_ok; then
+    report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
+  else
+    report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
+  fi
+  return $failed
+}
