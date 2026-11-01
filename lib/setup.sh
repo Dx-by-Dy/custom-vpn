@@ -19,7 +19,13 @@ migrate_env() {
 }
 
 cmd_init() {
-  [[ -f $ENV_FILE ]] || { cp .env.example "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
+  local want=${ROLE:-}
+  if [[ ! -f $ENV_FILE ]]; then
+    cp .env.example "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    # ROLE=exit ./vpn.sh deploy
+    [[ -z $want ]] || sed -i "s/^ROLE=.*/ROLE=$want/" "$ENV_FILE"
+  fi
   need_pkg jq "configs are built with it"
   migrate_env
   # Pick up keys added to .env.example after this .env was created
@@ -29,10 +35,13 @@ cmd_init() {
     grep -q "^${BASH_REMATCH[1]}=" "$ENV_FILE" || echo "$line" >>"$ENV_FILE"
   done <.env.example
   load_env
-  [[ $DOMAIN != vpn.example.com && $ACME_EMAIL != you@example.com ]] ||
-    die "set DOMAIN and ACME_EMAIL in $ENV_FILE first"
-  # caddy stores certificates under the lowercase name, hysteria reads them from there
-  [[ $DOMAIN == "${DOMAIN,,}" ]] || set_var DOMAIN "${DOMAIN,,}"
+  [[ -z $want || $want == "$ROLE" ]] || die "ROLE=$want given, but $ENV_FILE has ROLE=$ROLE"
+  if [[ $ROLE == hub ]]; then
+    [[ $DOMAIN != vpn.example.com && $ACME_EMAIL != you@example.com ]] ||
+      die "set DOMAIN and ACME_EMAIL in $ENV_FILE first"
+    # caddy stores certificates under the lowercase name, hysteria reads them from there
+    [[ $DOMAIN == "${DOMAIN,,}" ]] || set_var DOMAIN "${DOMAIN,,}"
+  fi
 
   [[ -n $REALITY_SHORT_ID ]] || set_var REALITY_SHORT_ID "$(rand_hex 8)"
   [[ -n ${ACME_CHECK_TOKEN:-} ]] || set_var ACME_CHECK_TOKEN "$(rand_hex 16)"
@@ -46,6 +55,10 @@ cmd_init() {
     set_var REALITY_PRIVATE_KEY "$(awk '/^PrivateKey/ {print $NF}' <<<"$keys")"
     set_var REALITY_PUBLIC_KEY "$(awk '/^PublicKey/ {print $NF}' <<<"$keys")"
     [[ -n $REALITY_PRIVATE_KEY && -n $REALITY_PUBLIC_KEY ]] || die "can't parse sing-box reality-keypair output: $keys"
+  fi
+  if [[ $ROLE == exit ]]; then
+    exit_init
+    return
   fi
 
   # Single-user setups kept the credentials in .env: move them to the "default" user
@@ -131,5 +144,5 @@ cmd_deploy() {
   cmd_init
   cmd_up
   install_timer
-  cmd_links
+  if [[ $ROLE == exit ]]; then cmd_hub list; else cmd_links; fi
 }

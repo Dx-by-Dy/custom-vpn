@@ -30,14 +30,8 @@ check_name() {
 # Prints "name uuid hysteria_user hysteria_pass" for a fresh credential
 new_cred() { echo "$1 $(cat /proc/sys/kernel/random/uuid) $1-$(rand_hex 2) $(rand_hex 16)"; }
 
-# Rewrite users.conf: awk program gets each non-comment line as fields
-users_rewrite() {
-  local tmp
-  tmp=$(mktemp "$USERS_FILE.XXXX")
-  awk "$@" "$USERS_FILE" >"$tmp"
-  chmod 600 "$tmp"
-  mv "$tmp" "$USERS_FILE"
-}
+# Rewrite users.conf: awk program gets each line as fields
+users_rewrite() { conf_rewrite "$USERS_FILE" "$@"; }
 
 # Sets per-user link variables used by templates and `links`
 user_vars() {
@@ -51,6 +45,7 @@ user_vars() {
 
 cmd_user() {
   local action=${1:-} name=${2:-}
+  require_role hub user
   case $action in
     add)
       check_name "$name"
@@ -84,6 +79,7 @@ cmd_user() {
 
 cmd_rotate() {
   local target=${1:-} grace=$DEFAULT_GRACE_HOURS names expires line
+  require_role hub rotate
   [[ -n $target ]] || die "usage: ./vpn.sh rotate NAME|--all [--grace HOURS]"
   shift
   while (($#)); do
@@ -139,7 +135,7 @@ cmd_prune() {
 
 cmd_links() {
   local only=${1:-} name uuid hy_user hy_pass token exp found=false
-  load_env
+  require_role hub links
   while read -r name uuid hy_user hy_pass token exp; do
     [[ -z $only || $name == "$only" ]] || continue
     found=true

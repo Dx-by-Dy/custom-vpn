@@ -11,7 +11,7 @@ DEFAULT_GRACE_HOURS=24
 DEFAULT_REPO_URL=https://github.com/Dx-by-Dy/custom-vpn.git
 DEFAULT_REPO_BRANCH=main
 # Files and directories that hold this server's state; never taken from the repo
-STATE_PATHS=(.env users.conf data generated)
+STATE_PATHS=(.env users.conf hubs.conf data generated)
 # What vpn.sh changed on the host outside this directory, for `uninstall`
 HOST_STATE=/var/lib/custom-vpn
 SYSCTL_CONF=/etc/sysctl.d/99-vpn.conf
@@ -24,6 +24,7 @@ Usage: ./vpn.sh <command> [args]
 
 Setup:
   deploy                  full setup: tune, init, up, maintenance timer, links
+                          (ROLE=exit ./vpn.sh deploy sets up an exit)
   init                    create .env, generate missing keys, create the first user
   up                      render configs, check ports, start/restart containers
   down                    stop containers
@@ -34,7 +35,7 @@ Setup:
   firewall [--dry-run]    enable ufw for ssh, VPN ports and other listening
                           services, optionally disable SSH password login
 
-Users:
+Users (hub):
   user add NAME           add a user and print their links
   user del NAME           remove a user, their links stop working immediately
   user list               list users
@@ -43,11 +44,18 @@ Users:
                           issue new credentials, the old ones keep working for
                           HOURS (default 24) so clients can refresh the subscription
 
+Hubs (ROLE=exit):
+  hub add NAME            let hub NAME use this exit, print the token for it
+  hub token NAME          print the token again (with egress IPs added since)
+  hub del NAME            remove a hub, it can't connect anymore
+  hub list                list hubs
+
 Maintenance:
   update images           upgrade sing-box / caddy images to the latest releases
   update repo             update this repo's code from GitHub (keeps .env, users, certificates)
   render                  render configs into generated/ and validate them
-  check                   check containers, certificate, Let's Encrypt path, REALITY target
+  check                   check containers, certificate, Let's Encrypt path, REALITY target,
+                          egress IPs (exit)
   prune                   drop expired credentials
                           (check and prune run hourly from vpn-maintenance.timer)
   help                    show this help
@@ -66,6 +74,7 @@ EOF
 . lib/update.sh
 . lib/firewall.sh
 . lib/uninstall.sh
+. lib/exit.sh
 
 # --- main --------------------------------------------------------------------
 
@@ -78,19 +87,20 @@ set -- "${args[@]+"${args[@]}"}"
 cmd=${1:-help}
 (($#)) && shift
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall) lock ;;
+  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub) lock ;;
 esac
 case $cmd in
   deploy) cmd_deploy ;;
   init) cmd_init ;;
   up) cmd_up ;;
-  down) "$DOCKER" compose down ;;
-  logs) "$DOCKER" compose logs -f --tail=100 ;;
+  down) load_env; "$DOCKER" compose down ;;
+  logs) load_env; "$DOCKER" compose logs -f --tail=100 ;;
   tune) cmd_tune ;;
   install-docker) cmd_install_docker ;;
   uninstall) cmd_uninstall ;;
   firewall) cmd_firewall "$@" ;;
   user) cmd_user "$@" ;;
+  hub) cmd_hub "$@" ;;
   links) cmd_links "$@" ;;
   rotate) cmd_rotate "$@" ;;
   update) cmd_update "$@" ;;

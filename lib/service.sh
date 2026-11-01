@@ -34,6 +34,7 @@ our_pids() {
 # Ports this stack listens on: "port/proto description"
 vpn_ports() {
   echo "$VLESS_PORT/tcp sing-box (VLESS REALITY)"
+  [[ $ROLE == hub ]] || return 0
   echo "$HYSTERIA_PORT/udp sing-box (hysteria)"
   echo "$SUB_PORT/tcp caddy (subscription)"
   echo "$SUB_PORT/udp caddy (subscription, HTTP/3)"
@@ -134,12 +135,14 @@ acme_path_warning() {
 preflight() {
   local resolved public
   # Repeated ACME failures hit Let's Encrypt rate limits
-  resolved=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
-  public=$(curl -4 -fsS -m 5 https://ifconfig.me 2>/dev/null || true)
-  if [[ -z $resolved ]]; then
-    warn "$DOMAIN doesn't resolve, caddy won't get a certificate"
-  elif [[ -n $public && $resolved != "$public" ]]; then
-    warn "$DOMAIN -> $resolved, but this server is $public"
+  if [[ $ROLE == hub ]]; then
+    resolved=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
+    public=$(curl -4 -fsS -m 5 https://ifconfig.me 2>/dev/null || true)
+    if [[ -z $resolved ]]; then
+      warn "$DOMAIN doesn't resolve, caddy won't get a certificate"
+    elif [[ -n $public && $resolved != "$public" ]]; then
+      warn "$DOMAIN -> $resolved, but this server is $public"
+    fi
   fi
   reality_target_ok ||
     warn "this server can't reach $REALITY_TARGET as https://$REALITY_SNI/: VLESS won't work, check REALITY_SNI / REALITY_TARGET"
@@ -158,9 +161,9 @@ cmd_up() {
     grep -qx "$svc" <<<"$running" && restart+=("$svc")
   done
   ((${#restart[@]} == 0)) || "$DOCKER" compose restart "${restart[@]}"
-  $HY2 || hy2_wait_cert
+  [[ $ROLE == exit ]] || $HY2 || hy2_wait_cert
   "$DOCKER" compose ps
-  acme_path_ok || acme_path_warning
+  [[ $ROLE == exit ]] || acme_path_ok || acme_path_warning
 }
 
 # First start: caddy gets the certificate in a minute or so, then hysteria can start
@@ -183,16 +186,30 @@ hy2_wait_cert() {
 # Health check for people and for vpn-maintenance.timer (non-zero exit = problem)
 cmd_check() {
   load_env
-  local failed=0 svc running days
+  local failed=0 svc running services=sing-box
   report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
 
+  [[ $ROLE == exit ]] || services+=" caddy"
   running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
-  for svc in sing-box caddy; do
+  for svc in $services; do
     grep -qx "$svc" <<<"$running" && continue
     report containers "FAIL: $svc is not running"
   done
   [[ $failed == 1 ]] || report containers "ok"
 
+  [[ $ROLE == exit ]] || check_hub_cert
+  if reality_target_ok; then
+    report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
+  else
+    report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
+  fi
+  [[ $ROLE == hub ]] || check_egress
+  return $failed
+}
+
+# Certificate, hysteria and the Let's Encrypt path; uses report from cmd_check
+check_hub_cert() {
+  local days
   if [[ ! -f $CERT ]]; then
     report certificate "FAIL: no certificate yet ($CERT)"
   elif command -v openssl >/dev/null; then
@@ -212,11 +229,4 @@ cmd_check() {
     report acme "FAIL: port 80 doesn't reach caddy, renewals will fail"
     acme_path_warning 2>&1 | tail -n +2
   fi
-
-  if reality_target_ok; then
-    report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
-  else
-    report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
-  fi
-  return $failed
 }

@@ -41,6 +41,10 @@ load_env() {
   [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN and ACME_EMAIL"
   grep -qE '^XRAY_(PORT|PRIVATE_KEY)=' "$ENV_FILE" && die "$ENV_FILE is from the xray version, run: ./vpn.sh init"
   set -a; . "./$ENV_FILE"; set +a
+  ROLE=${ROLE:-hub}
+  [[ $ROLE == hub || $ROLE == exit ]] || die "ROLE must be hub or exit, not $ROLE"
+  # caddy is in the "hub" compose profile
+  export COMPOSE_PROFILES=$ROLE
   REALITY_TARGET=${REALITY_TARGET:-$REALITY_SNI:443}
   local host=${REALITY_TARGET%:*}
   host=${host#[}
@@ -50,6 +54,22 @@ load_env() {
   export CERT_DIR=/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$DOMAIN
   SUB_NAME_ENC=$(urlencode "$SUB_NAME")
   SUB_TITLE_B64=$(printf '%s' "$SUB_NAME" | base64 -w0)
+}
+
+# Commands that exist on one role only: require_role ROLE COMMAND
+require_role() {
+  load_env
+  [[ $ROLE == "$1" ]] || die "./vpn.sh $2 is for ROLE=$1 servers, this one is ROLE=$ROLE"
+}
+
+# Rewrite a private conf file (users.conf, hubs.conf) through an awk program
+conf_rewrite() {
+  local file=$1 tmp
+  shift
+  tmp=$(mktemp "$file.XXXX")
+  awk "$@" "$file" >"$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$file"
 }
 
 # Write KEY=VALUE into .env (replace or append) and set it in this shell.

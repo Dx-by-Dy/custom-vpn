@@ -3,6 +3,7 @@ generated/
 data/
 old/
 users.conf
+hubs.conf
 .env.bak
 .vpn.lock
 backups/

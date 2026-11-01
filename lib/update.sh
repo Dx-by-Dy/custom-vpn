@@ -26,7 +26,9 @@ cmd_update_images() {
     [SINGBOX_IMAGE]="${SINGBOX_IMAGE%:*}:$sb" # ghcr tags keep the "v"
     [CADDY_IMAGE]="${CADDY_IMAGE%:*}:${c#v}-alpine"
   )
-  for var in SINGBOX_IMAGE CADDY_IMAGE; do
+  local vars=(SINGBOX_IMAGE)
+  [[ $ROLE == exit ]] || vars+=(CADDY_IMAGE)
+  for var in "${vars[@]}"; do
     new=${latest[$var]}
     [[ ${!var} == "$new" ]] && continue
     # Images often appear in registries some time after the GitHub release
@@ -111,10 +113,10 @@ cmd_update_repo() {
   chmod 700 backups
   backup=backups/state-$(date +%Y%m%d-%H%M%S).tar.gz
   local files=() f
-  for f in .env users.conf; do [[ -f $f ]] && files+=("$f"); done
+  for f in .env users.conf hubs.conf; do [[ -f $f ]] && files+=("$f"); done
   tar -czf "$backup" "${files[@]}"
   ls -1t backups/state-*.tar.gz | tail -n +11 | xargs -r rm -f
-  sums=$(sha256sum .env users.conf 2>/dev/null || true)
+  sums=$(sha256sum .env users.conf hubs.conf 2>/dev/null || true)
 
   git reset -q --hard "$new"
 
