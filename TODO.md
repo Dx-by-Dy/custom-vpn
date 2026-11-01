@@ -248,6 +248,11 @@ exit2: ufw (22, 80, 443, 9443), `btmp` очищен.
 exit3 `cz2` — 109.172.8.108 (CZ), 9443 рядом со старой xray-версией (не
 отключена; пользователи `default`, `s1`).
 
+Домен управления — `timetablers.org` (тот же аккаунт dnsmanage), резерв —
+`ctl.specterite.ru`: `CONTROL_DOMAIN="timetablers.org ctl.specterite.ru"`,
+переезд прошел без команд на хабах. `control check` — вся система с ноутбука
+(хабы выкладывают `status.json` по пути из своего age-ключа), `control dns`.
+
 Осталось:
 
 - ~~SNI `cdn.specterite.ru` на 443 получает сертификат prime-chinese.ru~~ —

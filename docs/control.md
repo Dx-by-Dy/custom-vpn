@@ -176,7 +176,29 @@ ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < generated/sta
 
 ## Что проверять
 
-- На каждом хабе `./vpn.sh check` (его же раз в час запускает таймер): строки `control` (версия и время примененного снимка) и `dns` (когда DNS читался последний раз; `FAIL`, если больше часа).
+С ноутбука — одной командой, без ssh:
+
+```sh
+./vpn.sh control check   # вся система; ненулевой код возврата, если что-то не так
+./vpn.sh control dns     # домены управления: порядок, зоны, какую версию отдают NS и публичные резолверы
+```
+
+```
+dns-panel    ok (user1870425 at https://dns-01.smartape.ru:1501/dnsmgr)
+dns          ok (timetablers.org: v1793575903 on the name servers of timetablers.org, 77.88.8.8 v1793575903)
+dns          ok (ctl.specterite.ru: v1793575903 on the name servers of specterite.ru, 77.88.8.8 v1793575903)
+hub          ok (hub2: v1793575903, check 0 min ago: 15 ok)
+route        ok (cz1/ip1 from hub1 hub2)
+```
+
+- `dns-panel` — вход в DNS-панель; `dns` — у каждого домена NS зоны отдают опубликованную версию.
+- `hub` — для каждого хаба: применил последний снимок (с запасом на 5 минут + TTL), читал DNS за последний час, его собственный `check` был за последние 2 часа и без `FAIL` (иначе строки `FAIL` показываются здесь же), его подписка отдается и содержит все хабы.
+- `route` — каждый маршрут каждого exit'а: с каких хабов работает, с каких нет (по `check` хабов: путь хаб → exit проверяется со стороны хаба).
+- Откуда control это знает: хаб под control выкладывает `status.json` рядом с подписками (`https://<хаб>:8443/<token>/status.json`; токен вычисляется из ключа шифрования хаба, его знают только хаб и control) — при каждом чтении DNS, применении снимка и `check` (раз в час). «no status» — хаб недоступен с ноутбука или на нем старый код (`./vpn.sh hub update repo`).
+
+На самом хабе:
+
+- `./vpn.sh hub check` (его же раз в час запускает таймер): строки `control` (версия и время примененного снимка) и `dns` (когда DNS читался последний раз; `FAIL`, если больше часа).
 - Хаб не берет снимок: `./vpn.sh hub control sync` на хабе покажет причину — `can't read head…` (DNS), `pieces are missing or don't match head` (куски еще не разошлись по кэшам — подождать TTL), `isn't signed by this hub's control` (другой ключ подписи), `can't decrypt` (хаб не в получателях: `hub add` здесь).
 - `publish` упал на DNS: `can't log in` — `DNS_USER` / `DNS_PASSWORD`; `… isn't in any zone` — домена нет в аккаунте; `the name servers … don't show v… yet; head is unchanged` — панель не успела обновить NS, просто повторить `./vpn.sh control publish` (новая версия, хабы не пострадали). Снимок при этом все равно лежит в `generated/state.txt` — его можно применить по ssh.
 
@@ -210,5 +232,7 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 | `user links [NAME]` | ссылки пользователя на каждом хабе |
 | `user rotate NAME\|--all [--grace H]` | новые ключи, старые работают еще H часов |
 | `import FILE` | забрать пользователей самостоятельного хаба (`hub control export` на нем) |
+| `check` | вся система: DNS, каждый хаб (снимок, DNS, его `check`, подписка), каждый маршрут |
+| `dns` | домены управления, их зоны и версии в DNS |
 | `publish` | собрать и опубликовать снимок заново (без изменений — новая версия того же) |
 | `prune` | удалить из схемы ключи с истекшей отсрочкой ротации и опубликовать |

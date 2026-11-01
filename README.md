@@ -38,7 +38,7 @@
 
 ### Проверка
 
-`./vpn.sh ROLE check` — здоровье этого сервера (что именно проверяется, см. документацию роли). `vpn-maintenance.timer` раз в час запускает `prune` и `check`; сбой виден в `systemctl --failed` и `journalctl -u vpn-maintenance`.
+`./vpn.sh control check` — вся система с ноутбука: DNS, каждый хаб, каждый маршрут ([docs/control.md](docs/control.md#что-проверять)). `./vpn.sh ROLE check` — здоровье этого сервера (что именно проверяется, см. документацию роли). `vpn-maintenance.timer` раз в час запускает `prune` и `check`; сбой виден в `systemctl --failed` и `journalctl -u vpn-maintenance`.
 
 ### Обновление
 
@@ -100,7 +100,7 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                   exit   add NAME TOKEN | del NAME | list
                   hub    add NAME TOKEN | token NAME | del NAME | list
                   route  list
-                  publish | import FILE | prune
+                  check | dns | publish | import FILE | prune
 
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
