@@ -11,7 +11,7 @@ cmd_uninstall() {
 
   # Containers by compose label: works even without a usable .env
   local ids images=""
-  ids=$("$DOCKER" ps -aq --filter label=com.docker.compose.project=vpn 2>/dev/null || true)
+  ids=$("$DOCKER" ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-vpn}" 2>/dev/null || true)
   if [[ -n $ids ]]; then
     images=$("$DOCKER" inspect -f '{{.Config.Image}}' $ids | sort -u)
     "$DOCKER" rm -f $ids >/dev/null
