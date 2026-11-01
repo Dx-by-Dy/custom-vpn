@@ -21,7 +21,7 @@ Caddy получает сертификат на `DOMAIN` и продлевае�
    ```sh
    git clone <repo> /opt/custom-vpn && cd /opt/custom-vpn
    ./vpn.sh install-docker             # если docker еще нет
-   cp .env.example .env && nano .env   # DOMAIN, ACME_EMAIL
+   cp .env.example .env && nano .env   # DOMAIN (ACME_EMAIL — по желанию)
    ./vpn.sh deploy                     # sysctl, ключи, первый пользователь, запуск, ссылки
    ```
 

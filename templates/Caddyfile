@@ -1,12 +1,12 @@
 {
 	# nothing uses the admin API; with host networking it would listen on the host's localhost:2019
 	admin off
-	# HTTP-01 only (tcp/443 belongs to sing-box). ACME_HTTP_PORT is 80, or a local port
+	# HTTP-01 only (tcp/443 is VLESS). ACME_HTTP_PORT is 80, or a local port
 	# that a web server owning port 80 forwards /.well-known/acme-challenge/ to.
 	http_port ${ACME_HTTP_PORT}
 	auto_https disable_redirects
 	cert_issuer acme {
-		email ${ACME_EMAIL}
+		${ACME_EMAIL_DIRECTIVE}
 		disable_tlsalpn_challenge
 		alt_http_port ${ACME_HTTP_PORT}
 	}

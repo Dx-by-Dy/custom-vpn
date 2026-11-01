@@ -37,8 +37,8 @@ cmd_init() {
   load_env
   [[ -z $want || $want == "$ROLE" ]] || die "ROLE=$want given, but $ENV_FILE has ROLE=$ROLE"
   if [[ $ROLE == hub ]]; then
-    [[ $DOMAIN != vpn.example.com && $ACME_EMAIL != you@example.com ]] ||
-      die "set DOMAIN and ACME_EMAIL in $ENV_FILE first"
+    [[ $DOMAIN != vpn.example.com ]] || die "set DOMAIN in $ENV_FILE first"
+    [[ ${ACME_EMAIL:-} != you@example.com ]] || die "set ACME_EMAIL in $ENV_FILE to your email or leave it empty"
     # caddy stores certificates under the lowercase name, hysteria reads them from there
     [[ $DOMAIN == "${DOMAIN,,}" ]] || set_var DOMAIN "${DOMAIN,,}"
   fi

@@ -38,7 +38,7 @@ urlencode() {
 rand_hex() { od -An -tx1 -N"$1" /dev/urandom | tr -d ' \n'; }
 
 load_env() {
-  [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN and ACME_EMAIL"
+  [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN"
   grep -qE '^XRAY_(PORT|PRIVATE_KEY)=' "$ENV_FILE" && die "$ENV_FILE is from the xray version, run: ./vpn.sh init"
   set -a; . "./$ENV_FILE"; set +a
   ROLE=${ROLE:-hub}
@@ -60,6 +60,8 @@ load_env() {
   # caddy's certificate for DOMAIN: on the host and in the sing-box container
   CERT=data/caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$DOMAIN/$DOMAIN.crt
   export CERT_DIR=/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$DOMAIN
+  # The ACME account works without an email (Let's Encrypt no longer mails anything)
+  if [[ -n ${ACME_EMAIL:-} ]]; then ACME_EMAIL_DIRECTIVE="email $ACME_EMAIL"; else ACME_EMAIL_DIRECTIVE="# no ACME_EMAIL"; fi
   SUB_NAME_ENC=$(urlencode "$SUB_NAME")
   SUB_TITLE_B64=$(printf '%s' "$SUB_NAME" | base64 -w0)
 }
