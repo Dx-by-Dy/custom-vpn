@@ -286,6 +286,7 @@ cmd_group() {
 }
 
 cmd_route() {
+  local where
   require_role "hub control" route
   case ${1:-} in
     list)
@@ -298,7 +299,8 @@ cmd_route() {
         }'
       echo
       echo "Routes: $(route_names | paste -sd' ')"
-      echo "RU (.ru .su .рф, Russian services, Russian IPs) leaves from this hub for everyone."
+      if [[ $ROLE == control ]]; then where="always leaves from the hub the user is connected to"; else where="leaves from this hub for everyone"; fi
+      echo "RU (.ru .su .рф, Russian services, Russian IPs) $where."
       ;;
     *) die "usage: ./vpn.sh route list" ;;
   esac
