@@ -98,7 +98,7 @@ hub_print_token() {
   local name=$1
   echo
   echo "[$name] egress IPs: $(exit_ips_shown)"
-  echo "  on the hub:  ./vpn.sh exit add EXIT_NAME '$(hub_token "$name")'"
+  echo "  in control (or on a stand-alone hub):  ./vpn.sh exit add EXIT_NAME '$(hub_token "$name")'"
   echo "  (routes there: EXIT_NAME/$(exit_ip_pairs | awk '{print $1}' | paste -sd' ' | sed 's| | EXIT_NAME/|g'))"
   echo
 }

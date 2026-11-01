@@ -169,6 +169,8 @@ acme_path_warning() {
 
 preflight() {
   local resolved public
+  # a client only listens on CLIENT_LISTEN; sing-box fails clearly if it's taken
+  [[ $ROLE != client ]] || return 0
   # Repeated ACME failures hit Let's Encrypt rate limits
   if [[ $ROLE == hub ]]; then
     resolved=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
@@ -202,9 +204,9 @@ cmd_up() {
     grep -qx "$svc" <<<"$running" && restart+=("$svc")
   done
   ((${#restart[@]} == 0)) || "$DOCKER" compose restart "${restart[@]}"
-  [[ $ROLE == exit ]] || $HY2 || hy2_wait_cert
+  [[ $ROLE != hub ]] || $HY2 || hy2_wait_cert
   "$DOCKER" compose ps
-  [[ $ROLE == exit ]] || acme_path_ok || acme_path_warning
+  [[ $ROLE != hub ]] || acme_path_ok || acme_path_warning
 }
 
 # First start: caddy gets the certificate in a minute or so, then hysteria can start
@@ -230,13 +232,17 @@ cmd_check() {
   local failed=0 svc running services=sing-box
   report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
 
-  [[ $ROLE == exit ]] || services+=" caddy"
+  [[ $ROLE != hub ]] || services+=" caddy"
   running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)
   for svc in $services; do
     grep -qx "$svc" <<<"$running" && continue
     report containers "FAIL: $svc is not running"
   done
   [[ $failed == 1 ]] || report containers "ok"
+  if [[ $ROLE == client ]]; then
+    check_client
+    return $failed
+  fi
 
   [[ $ROLE == exit ]] || check_hub_cert
   [[ $ROLE == exit ]] || check_control

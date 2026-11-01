@@ -247,12 +247,9 @@ cmd_control() {
       chmod 700 "$CONTROL_DIR"
       [[ -f $CONTROL_DIR/age.key ]] || age-keygen -o "$CONTROL_DIR/age.key" 2>/dev/null
       echo
-      echo "in control:  ./vpn.sh hub add NAME '$(jq -n --arg domain "$DOMAIN" \
-        --argjson vless_port "$VLESS_PORT" --argjson hysteria_port "$HYSTERIA_PORT" --argjson sub_port "$SUB_PORT" \
-        --arg sni "$REALITY_SNI" --arg pbk "$REALITY_PUBLIC_KEY" --arg sid "$REALITY_SHORT_ID" \
-        --arg recipient "$(age-keygen -y "$CONTROL_DIR/age.key")" '
-        {v: 1, domain: $domain, vless_port: $vless_port, hysteria_port: $hysteria_port, sub_port: $sub_port,
-         sni: $sni, public_key: $pbk, short_id: $sid, recipient: $recipient}' | token_encode cvpn-hub)'"
+      echo "in control:  ./vpn.sh hub add NAME '$(hub_info_json |
+        jq --arg recipient "$(age-keygen -y "$CONTROL_DIR/age.key")" '{v: 1} + . + {recipient: $recipient}' |
+        token_encode cvpn-hub)'"
       echo
       ;;
     set)
@@ -260,8 +257,8 @@ cmd_control() {
         die "that's not a control token: it starts with cvpn-ctl: (./vpn.sh hub add in control prints it)"
       [[ -f $CONTROL_DIR/age.key ]] || die "run ./vpn.sh control join first"
       set_var HUB_NAME "$(jq -r .hub <<<"$json")"
-      set_var CONTROL_KEY "\"$(jq -r .key <<<"$json")\""
-      set_var CONTROL_DOMAIN "\"$(jq -r '.domain // empty' <<<"$json")\""
+      set_var CONTROL_KEY "$(jq -r .key <<<"$json")"
+      set_var CONTROL_DOMAIN "$(jq -r '.domain // empty' <<<"$json")"
       info "hub $HUB_NAME is managed by control now: users and routes come from its snapshots"
       if [[ -z $CONTROL_DOMAIN ]]; then
         remove_sync_timer
@@ -338,7 +335,7 @@ state_apply() {
   conf_from_json "$ROUTING_FILE" "$ROUTING_HEADER" "$(jq -c .routing <<<"$json")"
   conf_from_json "$EXITS_FILE" "$EXITS_HEADER" "$(jq -c .exits <<<"$json")"
   set_var ROUTE_DEFAULT "$(jq -r .settings.ROUTE_DEFAULT <<<"$json")"
-  set_var SUB_NAME "$(printf '%q' "$(jq -r .settings.SUB_NAME <<<"$json")")"
+  set_var SUB_NAME "$(jq -r .settings.SUB_NAME <<<"$json")"
   apply_control_domains "$(jq -r '.settings.CONTROL_DOMAIN // empty' <<<"$json")"
   # Everything control said, for what comes later (other hubs in the subscription)
   printf '%s\n' "$json" >"$CONTROL_DIR/state.json"
@@ -353,7 +350,7 @@ state_apply() {
 apply_control_domains() {
   local new=$1
   [[ -n $new && -n $(control_domains) && $new != "$(control_domains_line)" ]] || return 0
-  set_var CONTROL_DOMAIN "\"$new\""
+  set_var CONTROL_DOMAIN "$new"
   info "control's snapshots come from $new now"
 }
 

@@ -33,10 +33,11 @@ usage() {
 Usage: ./vpn.sh <command> [args]
 
 EOF
-  show "hub exit" <<'EOF'
+  show "hub exit client" <<'EOF'
 Setup:
   deploy                  full setup: tune, init, up, maintenance timer, links
-                          (ROLE=exit ./vpn.sh deploy sets up an exit)
+                          (ROLE=exit ./vpn.sh deploy sets up an exit,
+                          ROLE=client CLIENT_SUB=LINK ./vpn.sh deploy a client)
   init                    create .env, generate missing keys, create the first user
   up                      render configs, check ports, start/restart containers
   down                    stop containers
@@ -46,6 +47,12 @@ Setup:
   uninstall               remove everything vpn.sh set up on this host (asks what to keep)
   firewall [--dry-run]    enable ufw for ssh, VPN ports and other listening
                           services, optionally disable SSH password login
+
+EOF
+  show "client" <<'EOF'
+Client (ROLE=client): a local proxy (socks5 + http on CLIENT_LISTEN) through the
+hubs of the subscription CLIENT_SUB; RU leaves from the hub, the rest by the
+user's route
 
 EOF
   show "control" <<'EOF'
@@ -144,6 +151,7 @@ EOF
 . lib/routes.sh
 . lib/control.sh
 . lib/dns.sh
+. lib/client.sh
 
 # --- main --------------------------------------------------------------------
 
@@ -159,12 +167,20 @@ case $cmd in
   deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route | control | state | sync | publish | import) lock ;;
 esac
 # Control is a laptop: nothing to run or check there
-if [[ $(env_role) == control ]]; then
-  case $cmd in
-    init | user | links | rotate | prune | exit | group | route | hub | publish | import | up | help | -h | --help) ;;
-    *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
-  esac
-fi
+case $(env_role) in
+  control)
+    case $cmd in
+      init | user | links | rotate | prune | exit | group | route | hub | publish | import | up | help | -h | --help) ;;
+      *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
+    esac
+    ;;
+  client)
+    case $cmd in
+      deploy | init | up | down | logs | tune | install-docker | uninstall | firewall | render | check | prune | update | help | -h | --help) ;;
+      *) die "./vpn.sh $cmd isn't for ROLE=client (./vpn.sh help)" ;;
+    esac
+    ;;
+esac
 case $cmd in
   deploy) cmd_deploy ;;
   init) cmd_init ;;

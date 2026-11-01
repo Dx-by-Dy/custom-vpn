@@ -63,13 +63,24 @@ load_env() {
   ROLE=${ROLE:-hub}
   # .env from before routes: everyone leaves from the hub, as before (empty means none)
   ROUTE_DEFAULT=${ROUTE_DEFAULT-local}
-  [[ $ROLE == hub || $ROLE == exit || $ROLE == control ]] || die "ROLE must be hub, exit or control, not $ROLE"
+  [[ $ROLE == hub || $ROLE == exit || $ROLE == client || $ROLE == control ]] ||
+    die "ROLE must be hub, exit, client or control, not $ROLE"
   # control is a laptop: no servers, ports or certificates
   [[ $ROLE != control ]] || return 0
+  local listen host
   # caddy is in the "hub" compose profile
   export COMPOSE_PROFILES=$ROLE
+  if [[ $ROLE == client ]]; then
+    # CLIENT_LISTEN=[host:]port of the local proxy, by default on localhost only
+    listen=${CLIENT_LISTEN:-127.0.0.1:2080}
+    [[ $listen == *:* ]] || listen="127.0.0.1:$listen"
+    host=${listen%:*}
+    host=${host#[}
+    export CLIENT_LISTEN_HOST=${host%]} CLIENT_LISTEN_PORT=${listen##*:}
+    return 0
+  fi
   # VLESS_LISTEN=[host:]port, by default all addresses on VLESS_PORT
-  local listen=${VLESS_LISTEN:-$VLESS_PORT} host
+  listen=${VLESS_LISTEN:-$VLESS_PORT}
   [[ $listen == *:* ]] || listen=":::$listen"
   host=${listen%:*}
   host=${host#[}
@@ -119,16 +130,19 @@ conf_rewrite() {
   mv "$tmp" "$file"
 }
 
-# Write KEY=VALUE into .env (replace or append) and set it in this shell.
-# VALUE goes in as is: quote it for the shell if it needs that.
+# Write KEY=VALUE into .env (replace or append, quoted for the shell if it
+# needs that) and set it in this shell
 set_var() {
-  local key=$1 val=$2
+  local key=$1 raw=$2 val=$2
+  if [[ ! $raw =~ ^[A-Za-z0-9_.,:/@%+=-]*$ ]]; then
+    if [[ $raw == *[\"\\\$\`]* ]]; then val=$(printf '%q' "$raw"); else val="\"$raw\""; fi
+  fi
   if grep -q "^$key=" "$ENV_FILE"; then
     K=$key V=$val conf_rewrite "$ENV_FILE" 'index($0, ENVIRON["K"] "=") == 1 {print ENVIRON["K"] "=" ENVIRON["V"]; next} {print}'
   else
     echo "$key=$val" >>"$ENV_FILE"
   fi
-  export "$key=$val"
+  export "$key=$raw"
 }
 
 singbox_cli() { "$DOCKER" run --rm "$SINGBOX_IMAGE" "$@"; }

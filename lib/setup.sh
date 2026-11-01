@@ -19,7 +19,8 @@ migrate_env() {
 }
 
 cmd_init() {
-  local want=${ROLE:-}
+  # ROLE=client CLIENT_SUB=LINK [CLIENT_LISTEN=...] ./vpn.sh deploy
+  local want=${ROLE:-} want_sub=${CLIENT_SUB:-} want_listen=${CLIENT_LISTEN:-}
   if [[ $(env_role) == control ]]; then
     control_init
     return
@@ -40,6 +41,16 @@ cmd_init() {
   done <.env.example
   load_env
   [[ -z $want || $want == "$ROLE" ]] || die "ROLE=$want given, but $ENV_FILE has ROLE=$ROLE"
+  if [[ $ROLE == client ]]; then
+    [[ -z $want_sub || -n ${CLIENT_SUB:-} ]] || set_var CLIENT_SUB "$want_sub"
+    if [[ -n $want_listen && $want_listen != "${CLIENT_LISTEN:-}" ]]; then
+      set_var CLIENT_LISTEN "$want_listen"
+      load_env
+    fi
+    [[ -n ${CLIENT_SUB:-} ]] || die "set CLIENT_SUB in $ENV_FILE: the subscription link of this client's user"
+    info "client of $(client_subs | paste -sd' '), proxy on $CLIENT_LISTEN_HOST:$CLIENT_LISTEN_PORT"
+    return
+  fi
   if [[ $ROLE == hub ]]; then
     [[ $DOMAIN != vpn.example.com ]] || die "set DOMAIN in $ENV_FILE first"
     [[ ${ACME_EMAIL:-} != you@example.com ]] || die "set ACME_EMAIL in $ENV_FILE to your email or leave it empty"
@@ -151,5 +162,9 @@ cmd_deploy() {
   cmd_init
   cmd_up
   install_timer
-  if [[ $ROLE == exit ]]; then cmd_hub list; else cmd_links; fi
+  case $ROLE in
+    exit) cmd_hub list ;;
+    client) info "proxy: socks5 and http on $CLIENT_LISTEN_HOST:$CLIENT_LISTEN_PORT" ;;
+    *) cmd_links ;;
+  esac
 }

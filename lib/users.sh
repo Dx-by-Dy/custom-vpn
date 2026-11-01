@@ -156,6 +156,10 @@ cmd_rotate() {
 cmd_prune() {
   load_env
   [[ $ROLE != exit ]] || return 0
+  if [[ $ROLE == client ]]; then
+    client_refresh
+    return 0
+  fi
   [[ $ROLE != hub ]] || rule_sets_refresh 24
   # control drops expired credentials from the snapshots; hubs filter them anyway
   ! managed || return 0
