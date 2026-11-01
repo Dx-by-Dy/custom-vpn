@@ -203,7 +203,7 @@ cmd_check() {
   else
     report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
   fi
-  [[ $ROLE == hub ]] || check_egress
+  if [[ $ROLE == hub ]]; then check_routes; else check_egress; fi
   return $failed
 }
 

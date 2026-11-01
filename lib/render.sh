@@ -8,12 +8,13 @@ host_ips_json() {
     awk '{split($4, a, "/"); print a[1] (index(a[1], ":") ? "/128" : "/32")}' | jq -Rn '[inputs]'
 }
 
-# Valid credentials as JSON for the sing-box template
+# Valid credentials with the user's route as JSON for the sing-box template
 users_json() {
-  users_valid | jq -Rn '[inputs | [splits("[ \t]+")] | {
+  users_valid | jq -Rn --argjson routes "$(user_routes_json)" '[inputs | [splits("[ \t]+")] | {
     name: (if .[5] == "-" then .[0] else .[0] + "~" + .[5] end),
     uuid: .[1],
-    hy2: (.[2] + ":" + .[3])
+    hy2: (.[2] + ":" + .[3]),
+    route: ($routes[.[0]] // "none")
   }]'
 }
 
@@ -33,10 +34,13 @@ cmd_render() {
   [[ -n $(users_active) ]] || die "no users, run: ./vpn.sh init"
 
   [[ -s $CERT ]] && HY2=true || HY2=false
+  # Missing RU lists only; the timer refreshes them daily
+  rule_sets_update 1000000
   mkdir -p "$OUT/sub"
   chmod 700 "$OUT"
   render_jq templates/hub.jq "$OUT/sing-box.json" sing-box \
-    --argjson users "$(users_json)" --argjson host_ips "$(host_ips_json)" --argjson hy2 "$HY2"
+    --argjson users "$(users_json)" --argjson routes "$(exit_routes_json)" \
+    --argjson rule_sets "$(rule_sets_json)" --argjson host_ips "$(host_ips_json)" --argjson hy2 "$HY2"
   render_file templates/Caddyfile "$OUT/Caddyfile" caddy
 
   # Per-user subscription and import page; drop pages of removed users
@@ -54,9 +58,9 @@ cmd_render() {
     [[ $tokens == *" $dir "* ]] || rm -rf "${OUT:?}/sub/$dir"
   done
 
-  mkdir -p data/caddy
+  mkdir -p data/caddy "$RULE_SETS_DIR"
   check sing-box -v "$PWD/$OUT/sing-box.json:/c.json:ro,z" -v "$PWD/data/caddy:/caddy-data:ro,z" \
-    "$SINGBOX_IMAGE" check -c /c.json
+    -v "$PWD/$RULE_SETS_DIR:/rule-sets:ro,z" "$SINGBOX_IMAGE" check -c /c.json
   check caddy -v "$PWD/$OUT/Caddyfile:/c:ro,z" "$CADDY_IMAGE" caddy validate --config /c --adapter caddyfile
   info "configs rendered to $OUT/"
 }

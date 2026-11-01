@@ -45,6 +45,7 @@ cmd_init() {
 
   [[ -n $REALITY_SHORT_ID ]] || set_var REALITY_SHORT_ID "$(rand_hex 8)"
   [[ -n ${ACME_CHECK_TOKEN:-} ]] || set_var ACME_CHECK_TOKEN "$(rand_hex 16)"
+  [[ -n ${CHECK_TOKEN:-} ]] || set_var CHECK_TOKEN "$(rand_hex 16)"
   if [[ -n $REALITY_PRIVATE_KEY && -z $REALITY_PUBLIC_KEY ]]; then
     die "REALITY_PUBLIC_KEY is empty, but REALITY_PRIVATE_KEY is set: restore it from a backup (new keys would break every client)"
   fi

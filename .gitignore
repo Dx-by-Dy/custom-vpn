@@ -7,3 +7,6 @@ hubs.conf
 .env.bak
 .vpn.lock
 backups/
+exits.conf
+groups.conf
+routing.conf

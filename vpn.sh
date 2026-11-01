@@ -10,8 +10,13 @@ DEFAULT_GRACE_HOURS=24
 # `update repo` pulls from here; override with REPO_URL / REPO_BRANCH in .env
 DEFAULT_REPO_URL=https://github.com/Dx-by-Dy/custom-vpn.git
 DEFAULT_REPO_BRANCH=main
+# Settings and lists that are this server's state: backed up by `update repo`
+CONF_FILES=(.env users.conf hubs.conf exits.conf groups.conf routing.conf)
 # Files and directories that hold this server's state; never taken from the repo
-STATE_PATHS=(.env users.conf hubs.conf data generated)
+STATE_PATHS=("${CONF_FILES[@]}" data generated)
+# What `check` asks for the public IP a route leaves from: a foreign site and a .ru one
+IP_ECHO_URL=https://api.ipify.org
+IP_ECHO_RU_URL=https://ip.beget.ru
 # What vpn.sh changed on the host outside this directory, for `uninstall`
 HOST_STATE=/var/lib/custom-vpn
 SYSCTL_CONF=/etc/sysctl.d/99-vpn.conf
@@ -36,13 +41,29 @@ Setup:
                           services, optionally disable SSH password login
 
 Users (hub):
-  user add NAME           add a user and print their links
+  user add NAME [--group G] [--route R]
+                          add a user and print their links
   user del NAME           remove a user, their links stop working immediately
   user list               list users
+  user route NAME ROUTE|- set the user's own route (- : the group's or ROUTE_DEFAULT)
+  user group NAME GROUP|- put the user into a group (- : no group)
   links [NAME]            print subscription links (all users or one)
   rotate NAME|--all [--grace HOURS]
                           issue new credentials, the old ones keep working for
                           HOURS (default 24) so clients can refresh the subscription
+
+Routes (hub): where traffic that isn't RU leaves; RU always leaves from the hub
+  exit add NAME TOKEN     add (or update) an exit from the token `hub add` printed on it;
+                          its egress IPs become routes NAME/IPNAME
+  exit del NAME           remove an exit
+  exit list               list exits and their routes
+  group add NAME [ROUTE]  add a group of users with a common route
+  group route NAME ROUTE|-
+                          change the group's route (- : ROUTE_DEFAULT)
+  group del NAME          remove an empty group
+  group list              list groups
+  route list              who leaves through which route
+                          Routes: local (this hub), none (no internet but RU), EXIT/IPNAME
 
 Hubs (ROLE=exit):
   hub add NAME            let hub NAME use this exit, print the token for it
@@ -52,11 +73,12 @@ Hubs (ROLE=exit):
 
 Maintenance:
   update images           upgrade sing-box / caddy images to the latest releases
+  update rules            download the RU lists again (hub; done daily by the timer)
   update repo             update this repo's code from GitHub (keeps .env, users, certificates)
   render                  render configs into generated/ and validate them
   check                   check containers, certificate, Let's Encrypt path, REALITY target,
-                          egress IPs (exit)
-  prune                   drop expired credentials
+                          routes (hub), egress IPs (exit)
+  prune                   drop expired credentials, refresh the RU lists
                           (check and prune run hourly from vpn-maintenance.timer)
   help                    show this help
 
@@ -75,6 +97,7 @@ EOF
 . lib/firewall.sh
 . lib/uninstall.sh
 . lib/exit.sh
+. lib/routes.sh
 
 # --- main --------------------------------------------------------------------
 
@@ -87,7 +110,7 @@ set -- "${args[@]+"${args[@]}"}"
 cmd=${1:-help}
 (($#)) && shift
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub) lock ;;
+  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route) lock ;;
 esac
 case $cmd in
   deploy) cmd_deploy ;;
@@ -101,6 +124,9 @@ case $cmd in
   firewall) cmd_firewall "$@" ;;
   user) cmd_user "$@" ;;
   hub) cmd_hub "$@" ;;
+  exit) cmd_exit "$@" ;;
+  group) cmd_group "$@" ;;
+  route) cmd_route "$@" ;;
   links) cmd_links "$@" ;;
   rotate) cmd_rotate "$@" ;;
   update) cmd_update "$@" ;;

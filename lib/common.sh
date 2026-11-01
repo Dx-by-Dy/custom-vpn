@@ -42,6 +42,8 @@ load_env() {
   grep -qE '^XRAY_(PORT|PRIVATE_KEY)=' "$ENV_FILE" && die "$ENV_FILE is from the xray version, run: ./vpn.sh init"
   set -a; . "./$ENV_FILE"; set +a
   ROLE=${ROLE:-hub}
+  # .env from before routes: everyone leaves from the hub, as before (empty means none)
+  ROUTE_DEFAULT=${ROUTE_DEFAULT-local}
   [[ $ROLE == hub || $ROLE == exit ]] || die "ROLE must be hub or exit, not $ROLE"
   # caddy is in the "hub" compose profile
   export COMPOSE_PROFILES=$ROLE
@@ -62,7 +64,23 @@ require_role() {
   [[ $ROLE == "$1" ]] || die "./vpn.sh $2 is for ROLE=$1 servers, this one is ROLE=$ROLE"
 }
 
-# Rewrite a private conf file (users.conf, hubs.conf) through an awk program
+# Private conf files (users.conf, hubs.conf, ...): a header comment, then one row per line
+conf_init() { [[ -f $1 ]] || { echo "$2" >"$1"; chmod 600 "$1"; }; }
+conf_rows() { awk '!/^#/ && NF' "$1" 2>/dev/null || true; }
+
+check_name() {
+  [[ $1 =~ ^[a-z0-9_-]{1,32}$ ]] || die "${2:-name} must be 1-32 chars of a-z, 0-9, _ and -"
+}
+
+# Fetch URL through the local socks inbound of `check` as USER (check@...)
+via_check() {
+  curl -s -m 10 --socks5-hostname "127.0.0.1:$CHECK_PORT" --proxy-user "$1:$CHECK_TOKEN" "$2" 2>/dev/null || true
+}
+
+# "as IP" / "nowhere" for check messages
+leaves_as() { [[ -n $1 ]] && echo "as $1" || echo nowhere; }
+
+# Rewrite a private conf file through an awk program
 conf_rewrite() {
   local file=$1 tmp
   shift
@@ -130,7 +148,7 @@ render_jq() {
   local tpl=$1 out=$2 service=$3 var content
   shift 3
   for var in $(grep -o '\$ENV\.[A-Z0-9_]*' "$tpl" | cut -d. -f2 | sort -u); do
-    [[ -n ${!var:-} ]] || die "$var is empty (used in $tpl)"
+    [[ -n ${!var:-} ]] || die "$var is empty (used in $tpl); new settings are added by: ./vpn.sh init"
   done
   content=$(jq -n "$@" -f "$tpl") || die "can't render $tpl"
   write_file "$out" "$content" "$service"

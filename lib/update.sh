@@ -13,7 +13,12 @@ cmd_update() {
   case ${1:-} in
     images) cmd_update_images ;;
     repo) cmd_update_repo ;;
-    *) die "usage: ./vpn.sh update images|repo" ;;
+    rules)
+      require_role hub "update rules"
+      rule_sets_refresh 0
+      info "RU lists: $(rule_sets_json | jq -r 'join(", ")') ($RULE_SETS_DIR)"
+      ;;
+    *) die "usage: ./vpn.sh update images|repo|rules" ;;
   esac
 }
 
@@ -113,10 +118,10 @@ cmd_update_repo() {
   chmod 700 backups
   backup=backups/state-$(date +%Y%m%d-%H%M%S).tar.gz
   local files=() f
-  for f in .env users.conf hubs.conf; do [[ -f $f ]] && files+=("$f"); done
+  for f in "${CONF_FILES[@]}"; do [[ -f $f ]] && files+=("$f"); done
   tar -czf "$backup" "${files[@]}"
   ls -1t backups/state-*.tar.gz | tail -n +11 | xargs -r rm -f
-  sums=$(sha256sum .env users.conf hubs.conf 2>/dev/null || true)
+  sums=$(sha256sum "${files[@]}")
 
   git reset -q --hard "$new"
 

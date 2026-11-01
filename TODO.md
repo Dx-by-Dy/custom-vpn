@@ -125,13 +125,30 @@ UUID на каждый IP). Свой `REALITY_SNI` для exit'а, `check` дл�
 процессы хоста или docker-контейнеры, нужен ли tun; подписка при нескольких
 хабах (общий домен `sub.` с A-записью на живой хаб?).
 
-### Этап 3. Маршруты на одном хабе
+### Этап 3. Маршруты на одном хабе — сделано
 
-Модель и формат: `exit add NAME TOKEN|del|list` (псевдонимы IP), группы,
-`user add NAME --route R|--group G`, `route list`; RU → `local`, fail-closed.
-Назначения отдельно от `users.conf` (не копировать в ротированные ключи).
-`check` проверяет каждый маршрут через локальный socks-inbound и сверяет
-выходной IP. Проверить на хабе 91.219.150.99 + exit 109.172.8.54.
+`exit add NAME TOKEN|del|list`, `group add|route|del|list`, `user add
+--group/--route`, `user route|group`, `route list`; `exits.conf`,
+`groups.conf`, `routing.conf`; `ROUTE_DEFAULT` (нет ключа в `.env` — `local`,
+как раньше). На exit'е `EXIT_IPS=ИМЯ=IP`, имена в токене. Списки RU
+(geosite-category-ru, geoip-ru от SagerNet) в `data/rule-sets/`, обновляются
+таймером, при недоступном GitHub — через exit. `check` на хабе: каждый
+маршрут, `none` и RU через него, свежесть списков, пользователи без маршрута.
+
+Важное из проверки: после `resolve` sing-box шлет дальше IP, а не имя —
+поэтому хаб резолвит только то, что уходит с него (RU и `local`), а на exit
+идет имя. geoip-ru срабатывает только на соединения по IP. Российский
+провайдер тормозит часть IP Cloudflare (ipify), поэтому `local` проверяется
+через `ip.beget.ru`.
+
+Проверено (хаб — локально в podman, exit — 109.172.8.54 с двумя IP):
+группа / свой маршрут / `ROUTE_DEFAULT` / `none` выходят каждый со своего IP
+(VLESS и hy2, TCP и UDP); RU у всех с хаба, в том числе у `none`; соединение
+к российскому IP без имени — `local`; localtest.me и 127.0.0.1 закрыты;
+переименование IP на exit'е и падение exit'а — без интернета, кроме RU, без
+подмены IP, `check` падает; старый ключ после `rotate` идет тем же маршрутом;
+переход со старого `.env` через `init`. На настоящем хабе — вместе с
+развертыванием (этап 7: docker + nginx `stream` на 91.219.150.99).
 
 ### Этап 4. Control и снимок состояния
 
