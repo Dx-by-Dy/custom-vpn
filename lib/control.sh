@@ -487,7 +487,7 @@ state_apply() {
   chmod 600 "$CONTROL_DIR/state.json"
   echo "$version" >"$CONTROL_DIR/version"
   cmd_up
-  hub_status snapshot "$(jq -cn --argjson v "$version" --arg at "$(date -u +%FT%TZ)" '{version: $v, applied: $at}')"
+  hub_status_snapshot
   info "snapshot v$version from $(jq -r .created <<<"$json") applied"
 }
 
@@ -521,6 +521,13 @@ hub_status() {
     jq -c --arg k "$1" --argjson val "$2" --arg hub "$HUB_NAME" '. + {v: 1, hub: $hub} + {($k): $val}' >"$dir/status.json.tmp"
   chmod 644 "$dir/status.json.tmp"
   mv "$dir/status.json.tmp" "$dir/status.json"
+}
+
+# The snapshot this hub has applied, into its status
+hub_status_snapshot() {
+  [[ -f $CONTROL_DIR/version ]] || return 0
+  hub_status snapshot "$(jq -cn --argjson v "$(cat "$CONTROL_DIR/version")" \
+    --arg at "$(date -u -r "$CONTROL_DIR/version" +%FT%TZ)" '{version: $v, applied: $at}')"
 }
 
 # check on a managed hub; uses report from cmd_check

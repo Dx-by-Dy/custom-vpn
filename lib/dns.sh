@@ -204,6 +204,7 @@ cmd_sync() {
   ((newest <= applied)) || die "v$newest is in DNS, but no resolver gave all its pieces"
   touch "$SYNCED_FILE"
   hub_status synced "\"$(date -u +%FT%TZ)\""
+  hub_status_snapshot
   info "up to date: v$applied"
 }
 

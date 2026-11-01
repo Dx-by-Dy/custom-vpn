@@ -276,6 +276,7 @@ cmd_check() {
   fi
   if [[ $ROLE == hub ]]; then check_routes; else check_egress; fi
   # for `control check`
+  [[ $ROLE != hub ]] || hub_status_snapshot
   [[ $ROLE != hub ]] || hub_status check "$(printf '%s\n' "${lines[@]}" |
     jq -Rn --arg at "$(date -u +%FT%TZ)" --argjson failed "$failed" '{at: $at, failed: ($failed == 1), lines: [inputs]}')"
   return $failed
