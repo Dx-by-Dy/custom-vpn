@@ -46,14 +46,15 @@ EOF
   fi
   grep -q '^CONTROL_DOMAIN=' "$ENV_FILE" || cat >>"$ENV_FILE" <<'EOF'
 
-# Snapshots go into TXT records under CONTROL_DOMAIN (a domain of its own, or a
-# subdomain of DNS_ZONE); hubs read them from there. Empty: by ssh only
-# (./vpn.sh state apply on each hub). Hubs learn it from `hub add`'s token.
+# Snapshots go into TXT records under CONTROL_DOMAIN: a domain of its own or a
+# subdomain, in a zone of the DNSmanager account below; several, space-separated,
+# go into each (CONTROL_DOMAIN="a.ru b.ru"). Hubs read them from there and learn
+# the list from `hub add`'s token, then from snapshots: to move to another
+# domain, add it, publish, drop the old one later. Empty: by ssh only
+# (./vpn.sh state apply on each hub).
 CONTROL_DOMAIN=
-# DNSmanager (ISPsystem) API of the zone, e.g. https://dns-01.example.ru:1501/dnsmgr
+# DNSmanager (ISPsystem) API, e.g. https://dns-01.example.ru:1501/dnsmgr
 DNS_API=
-# The zone in DNSmanager that holds CONTROL_DOMAIN (default: CONTROL_DOMAIN)
-DNS_ZONE=
 DNS_USER=
 DNS_PASSWORD=
 # TTL of the records, seconds: hubs see a new snapshot within 5 min + TTL
@@ -86,7 +87,7 @@ control_hubs_json() {
 
 # The token a hub needs to trust control
 control_token() {
-  jq -n --arg hub "$1" --arg key "$(cat "$CONTROL_DIR/sign.pub")" --arg domain "${CONTROL_DOMAIN:-}" '
+  jq -n --arg hub "$1" --arg key "$(cat "$CONTROL_DIR/sign.pub")" --arg domain "$(control_domains_line)" '
     {v: 1, hub: $hub, key: $key} + (if $domain != "" then {domain: $domain} else {} end)' |
     token_encode cvpn-ctl
 }
@@ -114,10 +115,10 @@ cmd_publish() {
     --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
     --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" \
     --argjson hubs "$(jq 'map(del(.recipient))' <<<"$hubs")" \
-    --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" '
+    --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" '
     {v: 1, version: $version, created: $created, users: $users, groups: $groups,
      routing: $routing, exits: $exits, hubs: $hubs,
-     settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name}}' |
+     settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}' |
     gzip -9 | age "${args[@]}" -o "$tmp/data"
   ssh-keygen -Y sign -q -f "$CONTROL_DIR/sign" -n "$SIG_NAMESPACE" "$tmp/data"
   mkdir -p "$OUT"
@@ -260,7 +261,7 @@ cmd_control() {
       [[ -f $CONTROL_DIR/age.key ]] || die "run ./vpn.sh control join first"
       set_var HUB_NAME "$(jq -r .hub <<<"$json")"
       set_var CONTROL_KEY "\"$(jq -r .key <<<"$json")\""
-      set_var CONTROL_DOMAIN "$(jq -r '.domain // empty' <<<"$json")"
+      set_var CONTROL_DOMAIN "\"$(jq -r '.domain // empty' <<<"$json")\""
       info "hub $HUB_NAME is managed by control now: users and routes come from its snapshots"
       if [[ -z $CONTROL_DOMAIN ]]; then
         remove_sync_timer
@@ -338,12 +339,22 @@ state_apply() {
   conf_from_json "$EXITS_FILE" "$EXITS_HEADER" "$(jq -c .exits <<<"$json")"
   set_var ROUTE_DEFAULT "$(jq -r .settings.ROUTE_DEFAULT <<<"$json")"
   set_var SUB_NAME "$(printf '%q' "$(jq -r .settings.SUB_NAME <<<"$json")")"
+  apply_control_domains "$(jq -r '.settings.CONTROL_DOMAIN // empty' <<<"$json")"
   # Everything control said, for what comes later (other hubs in the subscription)
   printf '%s\n' "$json" >"$CONTROL_DIR/state.json"
   chmod 600 "$CONTROL_DIR/state.json"
   echo "$version" >"$CONTROL_DIR/version"
   cmd_up
   info "snapshot v$version from $(jq -r .created <<<"$json") applied"
+}
+
+# Domains a snapshot names: the hub reads the next one from there. A hub on
+# ssh only stays so (it has no CONTROL_DOMAIN until `control set` gives one)
+apply_control_domains() {
+  local new=$1
+  [[ -n $new && -n $(control_domains) && $new != "$(control_domains_line)" ]] || return 0
+  set_var CONTROL_DOMAIN "\"$new\""
+  info "control's snapshots come from $new now"
 }
 
 # check on a managed hub; uses report from cmd_check

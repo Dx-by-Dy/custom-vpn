@@ -116,9 +116,8 @@ ROLE=control ./vpn.sh init       # .env и ключ подписи data/control/
 В `.env` — куда публиковать (файл только для владельца, пароль панели живет только здесь):
 
 ```sh
-CONTROL_DOMAIN=ctl.example.ru                 # под ним будут head.… и v<версия>-<i>.…
-DNS_API=https://dns-01.smartape.ru:1501/dnsmgr
-DNS_ZONE=example.ru                           # зона в dnsmanage (по умолчанию = CONTROL_DOMAIN)
+CONTROL_DOMAIN=ctl.example.ru                 # под ним будут head.… и v<версия>-<i>.…; можно несколько: "a.ru b.ru"
+DNS_API=https://dns-01.smartape.ru:1501/dnsmgr  # зону домена control находит в аккаунте сам
 DNS_USER=...
 DNS_PASSWORD=...
 DNS_TTL=300
@@ -147,6 +146,7 @@ DNS_TTL=300
 ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt
 ```
 
+- Список `CONTROL_DOMAIN` хабы получают в токене, а потом в каждом снимке. Переезд на другой домен: дописать его в `CONTROL_DOMAIN`, `./vpn.sh publish` (снимок ляжет в оба, хабы узнают новый список), позже убрать старый — на хабах ничего делать не нужно. Два домена в разных зонах — резерв: хаб берет снимок из того, что ответит.
 - Хаб читает `head` через резолверы по очереди: системный, 77.88.8.8, 1.1.1.1, 8.8.8.8 (`CONTROL_RESOLVERS` в `.env` хаба). Куски сверяются с sha256 из `head`, затем подпись и версия — как у `state apply`; что не прошло, не применяется. `check` падает, если DNS не читается больше часа.
 
 - На хабе под control команды, меняющие пользователей и маршруты, отказывают; `user list`, `route list`, `links` работают. `check` показывает версию примененного снимка. `control unset` — вернуть хаб к самостоятельному управлению (пользователи последнего снимка остаются).

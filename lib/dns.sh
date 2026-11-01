@@ -1,15 +1,18 @@
 # shellcheck shell=bash
 # Snapshot delivery through DNS TXT records; sourced by vpn.sh
 #
-# Control writes the snapshot line under CONTROL_DOMAIN through the DNSmanager
-# API (ISPsystem; dnsmanage of many Russian registrars and hosters):
-#   v<VERSION>-<I>.CONTROL_DOMAIN  TXT  piece I of the line (DNS_PIECE chars)
-#   head.CONTROL_DOMAIN            TXT  "cvpn1 v=VERSION n=PIECES sha256=HEX"
+# Control writes the snapshot line under each of CONTROL_DOMAIN (one or more
+# domains) through the DNSmanager API (ISPsystem; dnsmanage of many Russian
+# registrars and hosters):
+#   v<VERSION>-<I>.DOMAIN  TXT  piece I of the line (DNS_PIECE chars)
+#   head.DOMAIN            TXT  "cvpn1 v=VERSION n=PIECES sha256=HEX"
 # The pieces go first and head last, once every name server of the zone
 # answers with them, so a resolver never sees a head without its pieces. Hubs
 # read head through several resolvers, then the pieces, and apply the line as
 # `state apply` does: the signature and the version decide, DNS only carries it.
 # Pieces of old versions are deleted once their successor is older than 2 TTL.
+# The snapshot carries CONTROL_DOMAIN, so hubs follow when the list changes:
+# add the new domain, publish, drop the old one later.
 DNS_PIECE=1000
 DNS_RESOLVERS_DEFAULT="system 77.88.8.8 1.1.1.1 8.8.8.8"
 # How often hubs read head (vpn-sync.timer) and how long `check` tolerates not reading it
@@ -28,17 +31,25 @@ sha256() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 
 need_dig() { need_pkg dig "snapshots come through DNS" dnsutils bind-utils; }
 
+# CONTROL_DOMAIN as words (it may be "a.ru b.ru" or "a.ru,b.ru")
+control_domains() { tr ', ' '\n\n' <<<"${CONTROL_DOMAIN:-}" | sed '/^$/d; s/\.$//' | tr 'A-Z' 'a-z'; }
+control_domains_line() { control_domains | paste -sd' '; }
+
 # --- control: writing the records -------------------------------------------
 
-dns_enabled() { [[ -n ${CONTROL_DOMAIN:-} ]]; }
+dns_enabled() { [[ -n $(control_domains) ]]; }
 
 dns_settings() {
-  DNS_ZONE=${DNS_ZONE:-$CONTROL_DOMAIN}
   DNS_TTL=${DNS_TTL:-300}
   [[ -n ${DNS_API:-} && -n ${DNS_USER:-} && -n ${DNS_PASSWORD:-} ]] ||
     die "CONTROL_DOMAIN is set: set DNS_API, DNS_USER and DNS_PASSWORD in $ENV_FILE too"
-  [[ $CONTROL_DOMAIN == "$DNS_ZONE" || $CONTROL_DOMAIN == *."$DNS_ZONE" ]] ||
-    die "CONTROL_DOMAIN=$CONTROL_DOMAIN isn't in DNS_ZONE=$DNS_ZONE"
+}
+
+# The zone in the DNSmanager account that holds DOMAIN (the longest that matches)
+dns_zone_of() {
+  dns_api domain | jq -r --arg d "$1" '
+    [.elem[]?.name["$"] | rtrimstr(".") | . as $z | select($d == $z or ($d | endswith("." + $z)))]
+    | max_by(length) // empty'
 }
 
 # dns_api FUNC [curl args]: the "doc" of DNSmanager's answer; dies on an error
@@ -62,16 +73,16 @@ dns_login() {
   [[ -n $DNS_AUTH ]] || die "DNS API: can't log in as $DNS_USER (DNS_USER / DNS_PASSWORD)"
 }
 
-# TXT records under CONTROL_DOMAIN: "LABEL<TAB>VALUE<TAB>KEY" (LABEL without the domain)
+# TXT records under DNS_DOMAIN: "LABEL<TAB>VALUE<TAB>KEY" (LABEL without the domain)
 dns_records() {
-  dns_api domain.record --data-urlencode "elid=$DNS_ZONE" | jq -r --arg d ".$CONTROL_DOMAIN." '
+  dns_api domain.record --data-urlencode "elid=$DNS_ZONE" | jq -r --arg d ".$DNS_DOMAIN." '
     .elem[]? | select(.rtype_hidden["$"] == "TXT" and (.name["$"] | endswith($d)))
     | [(.name["$"] | rtrimstr($d)), .value["$"], .rkey["$"]] | @tsv'
 }
 
-# dns_put LABEL VALUE [KEY]: create LABEL.CONTROL_DOMAIN, or change the record KEY
+# dns_put LABEL VALUE [KEY]: create LABEL.DNS_DOMAIN, or change the record KEY
 dns_put() {
-  local name=$1.$CONTROL_DOMAIN key=()
+  local name=$1.$DNS_DOMAIN key=()
   name=${name%"$DNS_ZONE"}
   [[ -z ${3:-} ]] || key=(--data-urlencode "elid=$3")
   dns_api domain.record.edit --data-urlencode "plid=$DNS_ZONE" --data-urlencode "name=${name%.}" \
@@ -91,7 +102,7 @@ dns_wait() {
   [[ -n $servers ]] || die "no NS records for $DNS_ZONE"
   for ns in $servers; do
     for ((i = 0; i < ${#want[@]}; i += 2)); do
-      until [[ $(dns_txt "${want[i]}.$CONTROL_DOMAIN" "$ns") == "${want[i + 1]}" ]]; do
+      until [[ $(dns_txt "${want[i]}.$DNS_DOMAIN" "$ns") == "${want[i + 1]}" ]]; do
         ((SECONDS < deadline)) || return 1
         sleep 3
       done
@@ -99,16 +110,33 @@ dns_wait() {
   done
 }
 
-# Put STATE_FILE (snapshot VERSION) into DNS; part of control's publish
+# Put STATE_FILE (snapshot VERSION) under every domain of CONTROL_DOMAIN; part
+# of control's publish. Fails only if no domain took it
 dns_publish() {
-  local version=$1 line pieces n i head records old_head now keys
+  local version=$1 ok=0 failed=()
   dns_settings
   need_dig
+  dns_login
+  for DNS_DOMAIN in $(control_domains); do
+    DNS_ZONE=$(dns_zone_of "$DNS_DOMAIN")
+    if [[ -z $DNS_ZONE ]]; then
+      warn "$DNS_DOMAIN isn't in any zone of $DNS_USER at $DNS_API"
+      failed+=("$DNS_DOMAIN")
+    elif (dns_publish_domain "$version"); then
+      ok=$((ok + 1))
+    else
+      failed+=("$DNS_DOMAIN")
+    fi
+  done
+  ((ok > 0)) || die "the snapshot is in no DNS zone, run ./vpn.sh publish again"
+  ((${#failed[@]} == 0)) || warn "not published under: ${failed[*]} (hubs still read the others)"
+}
+
+dns_publish_domain() {
+  local version=$1 line pieces n i head records old_head now keys
   line=$(<"$STATE_FILE")
   n=$(((${#line} + DNS_PIECE - 1) / DNS_PIECE))
   head="cvpn1 v=$version n=$n sha256=$(sha256 "$line")"
-
-  dns_login
   records=$(dns_records)
   pieces=()
   for ((i = 0; i < n; i++)); do
@@ -136,40 +164,42 @@ dns_publish() {
       }
     }' <<<"$records")
   dns_delete <<<"$keys"
-  info "in DNS: head.$CONTROL_DOMAIN -> v$version ($n TXT records); hubs take it within ${SYNC_EVERY%min} min + TTL ${DNS_TTL}s"
+  info "in DNS: head.$DNS_DOMAIN -> v$version ($n TXT records); hubs take it within ${SYNC_EVERY%min} min + TTL ${DNS_TTL}s"
 }
 
 # --- hub: reading them -------------------------------------------------------
 
 cmd_sync() {
-  local applied head v n sha line i piece r answered=false newest=0
+  local applied head v n sha line i piece d r answered=false newest=0
   require_role hub sync
   managed || die "this hub isn't managed by control"
-  [[ -n ${CONTROL_DOMAIN:-} ]] || die "no CONTROL_DOMAIN: snapshots come by ssh only (./vpn.sh state apply)"
+  dns_enabled || die "no CONTROL_DOMAIN: snapshots come by ssh only (./vpn.sh state apply)"
   need_dig
   applied=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
-  for r in ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}; do
-    head=$(dns_txt "head.$CONTROL_DOMAIN" "$r")
-    [[ $head =~ ^cvpn1\ v=([0-9]+)\ n=([0-9]+)\ sha256=([0-9a-f]{64})$ ]] || continue
-    answered=true
-    v=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]} sha=${BASH_REMATCH[3]}
-    ((v > newest)) && newest=$v
-    ((v > applied && n > 0 && n <= 500)) || continue
-    line=
-    for ((i = 0; i < n; i++)); do
-      piece=$(dns_txt "v$v-$i.$CONTROL_DOMAIN" "$r")
-      [[ -n $piece ]] || break
-      line+=$piece
+  for d in $(control_domains); do
+    for r in ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}; do
+      head=$(dns_txt "head.$d" "$r")
+      [[ $head =~ ^cvpn1\ v=([0-9]+)\ n=([0-9]+)\ sha256=([0-9a-f]{64})$ ]] || continue
+      answered=true
+      v=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]} sha=${BASH_REMATCH[3]}
+      ((v > newest)) && newest=$v
+      ((v > applied && n > 0 && n <= 500)) || continue
+      line=
+      for ((i = 0; i < n; i++)); do
+        piece=$(dns_txt "v$v-$i.$d" "$r")
+        [[ -n $piece ]] || break
+        line+=$piece
+      done
+      if [[ $(sha256 "$line") != "$sha" ]]; then
+        warn "v$v of $d through $r: pieces are missing or don't match head"
+        continue
+      fi
+      touch "$SYNCED_FILE"
+      state_apply - <<<"$line"
+      return
     done
-    if [[ $(sha256 "$line") != "$sha" ]]; then
-      warn "v$v through $r: pieces are missing or don't match head"
-      continue
-    fi
-    touch "$SYNCED_FILE"
-    state_apply - <<<"$line"
-    return
   done
-  $answered || die "can't read head.$CONTROL_DOMAIN through any of: ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}"
+  $answered || die "can't read head.{$(control_domains_line | tr ' ' ,)} through any of: ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}"
   ((newest <= applied)) || die "v$newest is in DNS, but no resolver gave all its pieces"
   touch "$SYNCED_FILE"
   info "up to date: v$applied"
@@ -202,7 +232,7 @@ WantedBy=timers.target
 EOF
   systemctl daemon-reload
   systemctl enable -q --now vpn-sync.timer
-  info "vpn-sync.timer enabled: reads head.$CONTROL_DOMAIN every $SYNC_EVERY"
+  info "vpn-sync.timer enabled: reads control's snapshot from DNS every $SYNC_EVERY"
 }
 
 remove_sync_timer() {
@@ -215,16 +245,17 @@ remove_sync_timer() {
 
 # check on a managed hub; uses report from cmd_check
 check_sync() {
-  local age
-  [[ -n ${CONTROL_DOMAIN:-} ]] || return 0
+  local age domains
+  domains=$(control_domains_line)
+  [[ -n $domains ]] || return 0
   if [[ ! -f $SYNCED_FILE ]]; then
-    report dns "FAIL: head.$CONTROL_DOMAIN not read yet (./vpn.sh sync)"
+    report dns "FAIL: not read from $domains yet (./vpn.sh sync)"
     return
   fi
   age=$(($(date +%s) - $(date -r "$SYNCED_FILE" +%s)))
   if ((age <= SYNC_MAX_AGE)); then
-    report dns "ok (head.$CONTROL_DOMAIN read $((age / 60)) min ago)"
+    report dns "ok ($domains, read $((age / 60)) min ago)"
   else
-    report dns "FAIL: head.$CONTROL_DOMAIN unreadable for $((age / 60)) min (./vpn.sh sync)"
+    report dns "FAIL: $domains unreadable for $((age / 60)) min (./vpn.sh sync)"
   fi
 }
