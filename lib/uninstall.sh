@@ -78,10 +78,10 @@ cmd_uninstall() {
     rm -rf "${STATE_PATHS[@]}" backups .env.bak
     info "keys, users and certificates deleted"
   else
-    info "kept ${STATE_PATHS[*]}: ./vpn.sh deploy brings the same VPN back"
+    info "kept ${STATE_PATHS[*]}: $(vsh deploy) brings the same VPN back"
   fi
 
-  if [[ -f $HOST_STATE/docker-installed ]] && ask "Remove docker (installed by ./vpn.sh install-docker)?" n; then
+  if [[ -f $HOST_STATE/docker-installed ]] && ask "Remove docker (installed by vpn.sh install-docker)?" n; then
     # Only what is installed: apt refuses the whole list if one package is unknown
     local pkgs
     pkgs=$(dpkg-query -W -f='${Status} ${Package}\n' docker-ce docker-ce-cli containerd.io \

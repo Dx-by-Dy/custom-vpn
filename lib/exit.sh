@@ -55,7 +55,7 @@ hubs_json() {
 
 render_exit() {
   local name ip have
-  [[ -n $(exit_ips) ]] || die "EXIT_IPS is empty, run: ./vpn.sh init"
+  [[ -n $(exit_ips) ]] || die "EXIT_IPS is empty, run: ./vpn.sh exit init"
   # sing-box can't bind to an address the host doesn't have: connections would just fail
   have=" $(ip -o -4 addr show | awk '{split($4, a, "/"); print a[1]}' | tr '\n' ' ') "
   while read -r name ip; do
@@ -98,7 +98,8 @@ hub_print_token() {
   local name=$1
   echo
   echo "[$name] egress IPs: $(exit_ips_shown)"
-  echo "  in control (or on a stand-alone hub):  ./vpn.sh exit add EXIT_NAME '$(hub_token "$name")'"
+  echo "  in control:  ./vpn.sh control exit add EXIT_NAME '$(hub_token "$name")'"
+  echo "  (on a stand-alone hub: ./vpn.sh hub exit add EXIT_NAME ...)"
   echo "  (routes there: EXIT_NAME/$(exit_ip_pairs | awk '{print $1}' | paste -sd' ' | sed 's| | EXIT_NAME/|g'))"
   echo
 }
@@ -115,7 +116,7 @@ cmd_hub() {
     add)
       check_name "$name" "hub name"
       hubs_init
-      hub_exists "$name" && die "hub $name already exists (./vpn.sh hub token $name prints its token)"
+      hub_exists "$name" && die "hub $name already exists (./vpn.sh exit hub token $name prints its token)"
       hub_fill "$name"
       cmd_up
       hub_print_token "$name"
@@ -138,7 +139,7 @@ cmd_hub() {
       ;;
     list)
       if [[ -z $(hubs_rows) ]]; then
-        echo "No hubs yet. Add one: ./vpn.sh hub add NAME, then run the printed command on the hub."
+        echo "No hubs yet. Add one: ./vpn.sh exit hub add NAME, then run the printed command in control."
         echo "Egress IPs: $(exit_ips_shown)"
         return
       fi
@@ -153,7 +154,7 @@ cmd_hub() {
           for (i = 1; i <= k; i++) printf "%-20s%s\n", order[i], seen[order[i]]
         }'
       ;;
-    *) die "usage: ./vpn.sh hub add|token|del|list [NAME]" ;;
+    *) die "usage: ./vpn.sh exit hub add|token|del|list [NAME]" ;;
   esac
 }
 

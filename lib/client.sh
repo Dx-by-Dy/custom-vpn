@@ -79,7 +79,7 @@ check_client() {
       report subscription "FAIL: not refreshed for $((age / 3600))h (CLIENT_SUB unreachable?)"
     fi
   else
-    report subscription "FAIL: none yet (./vpn.sh up)"
+    report subscription "FAIL: none yet ($(vsh up))"
   fi
   proxy=${CLIENT_LISTEN_HOST/#0.0.0.0/127.0.0.1}
   proxy=${proxy/#::/127.0.0.1}

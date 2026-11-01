@@ -42,7 +42,7 @@ user_vars() {
 cmd_user() {
   local action=${1:-} name=${2:-} group="" route=""
   require_role "hub control" user
-  [[ $action == list ]] || require_editable "user $action"
+  [[ $action == list || $action == links ]] || require_editable "user $action"
   case $action in
     add)
       check_name "$name" "user name"
@@ -54,7 +54,7 @@ cmd_user() {
           *) die "unknown option: $1" ;;
         esac
       done
-      [[ -z $group ]] || group_exists "$group" || die "no group $group (./vpn.sh group add $group ROUTE)"
+      [[ -z $group ]] || group_exists "$group" || die "no group $group ($(vsh group add "$group") ROUTE)"
       [[ -z $route ]] || check_route "$route"
       users_init
       user_exists "$name" && die "user $name already exists"
@@ -76,7 +76,7 @@ cmd_user() {
       check_name "$name" "user name"
       user_exists "$name" || die "no user $name"
       route=${3:-}
-      [[ -n $route ]] || die "usage: ./vpn.sh user route NAME ROUTE|-"
+      [[ -n $route ]] || die "usage: $(vsh user route) NAME ROUTE|-"
       check_route "$route" dash-ok
       routing_set "$name" "" "$route"
       cmd_up
@@ -86,14 +86,14 @@ cmd_user() {
       check_name "$name" "user name"
       user_exists "$name" || die "no user $name"
       group=${3:-}
-      [[ -n $group ]] || die "usage: ./vpn.sh user group NAME GROUP|-"
-      [[ $group == - ]] || group_exists "$group" || die "no group $group (./vpn.sh group add $group ROUTE)"
+      [[ -n $group ]] || die "usage: $(vsh user group) NAME GROUP|-"
+      [[ $group == - ]] || group_exists "$group" || die "no group $group ($(vsh group add "$group") ROUTE)"
       routing_set "$name" "$group" ""
       cmd_up
       user_routes | awk -v n="$name" '$1 == n {print ">> " n " leaves through " ($4 == "missing" ? "none" : $3) " (" $4 ")"}'
       ;;
     list)
-      [[ -f $USERS_FILE ]] || die "no users yet, run: ./vpn.sh init"
+      [[ -f $USERS_FILE ]] || die "no users yet, run: $(vsh init)"
       awk -v now="$(date +%s)" '
         !/^#/ && NF && $6 == "-" { order[++n] = $1; token[$1] = $5 }
         !/^#/ && NF && $6 != "-" && $6 > now { old[$1]++ }
@@ -102,7 +102,9 @@ cmd_user() {
           for (i = 1; i <= n; i++) printf "%-20s %-34s %s\n", order[i], token[order[i]], old[order[i]] + 0
         }' "$USERS_FILE"
       ;;
-    *) die "usage: ./vpn.sh user add NAME [--group G] [--route R] | del NAME | list | route NAME ROUTE|- | group NAME GROUP|-" ;;
+    links) cmd_links "${@:2}" ;;
+    rotate) cmd_rotate "${@:2}" ;;
+    *) die "usage: $(vsh user) add NAME [--group G] [--route R] | del NAME | list | route NAME ROUTE|- | group NAME GROUP|- | links [NAME] | rotate NAME|--all" ;;
   esac
 }
 
@@ -110,7 +112,7 @@ cmd_rotate() {
   local target=${1:-} grace=$DEFAULT_GRACE_HOURS names expires line
   require_role "hub control" rotate
   require_editable rotate
-  [[ -n $target ]] || die "usage: ./vpn.sh rotate NAME|--all [--grace HOURS]"
+  [[ -n $target ]] || die "usage: $(vsh user rotate) NAME|--all [--grace HOURS]"
   shift
   while (($#)); do
     case $1 in

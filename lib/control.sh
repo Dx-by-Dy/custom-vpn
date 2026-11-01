@@ -19,7 +19,7 @@ managed() { [[ $ROLE == hub && -n ${CONTROL_KEY:-} ]]; }
 # Commands that change users / routes: on a hub under control they belong to control
 require_editable() {
   managed || return 0
-  die "this hub is managed by control (hub $HUB_NAME): ./vpn.sh $1 there, then apply the snapshot here"
+  die "this hub is managed by control (hub $HUB_NAME): ./vpn.sh control $1 there; it comes here as a snapshot"
 }
 
 # JSON from a "PREFIX:base64" token, or nothing
@@ -49,9 +49,9 @@ EOF
 # Snapshots go into TXT records under CONTROL_DOMAIN: a domain of its own or a
 # subdomain, in a zone of the DNSmanager account below; several, space-separated,
 # go into each (CONTROL_DOMAIN="a.ru b.ru"). Hubs read them from there and learn
-# the list from `hub add`'s token, then from snapshots: to move to another
+# the list from `control hub add`'s token, then from snapshots: to move to another
 # domain, add it, publish, drop the old one later. Empty: by ssh only
-# (./vpn.sh state apply on each hub).
+# (./vpn.sh hub control apply on each hub).
 CONTROL_DOMAIN=
 # DNSmanager (ISPsystem) API, e.g. https://dns-01.example.ru:1501/dnsmgr
 DNS_API=
@@ -71,7 +71,7 @@ EOF
   users_init
   conf_init "$HUBS_FILE" "$CONTROL_HUBS_HEADER"
   [[ -n ${CONTROL_DOMAIN:-} ]] || warn "CONTROL_DOMAIN is empty: snapshots go to hubs by ssh only (see $ENV_FILE)"
-  info "control is ready: add exits (./vpn.sh exit add), hubs (./vpn.sh hub add), users"
+  info "control is ready: add exits (./vpn.sh control exit add), hubs (./vpn.sh control hub add), users"
 }
 
 control_hub_exists() { conf_rows "$HUBS_FILE" | awk -v n="$1" '$1 == n {f = 1} END {exit !f}'; }
@@ -100,7 +100,7 @@ cmd_publish() {
   local hubs version last tmp r recipients=() args=()
   hubs=$(control_hubs_json)
   if [[ $(jq length <<<"$hubs") == 0 ]]; then
-    info "saved; no hubs yet, so nothing to publish (./vpn.sh hub add NAME TOKEN)"
+    info "saved; no hubs yet, so nothing to publish (./vpn.sh control hub add NAME TOKEN)"
     return
   fi
   mapfile -t recipients < <(jq -r '.[].recipient' <<<"$hubs")
@@ -131,7 +131,7 @@ cmd_publish() {
   if dns_enabled; then
     dns_publish "$version"
   else
-    echo "   on each hub: ssh HUB 'cd /opt/custom-vpn && ./vpn.sh state apply' < $STATE_FILE"
+    echo "   on each hub: ssh HUB 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < $STATE_FILE"
   fi
 }
 
@@ -145,7 +145,7 @@ control_links() {
     echo
     echo "[$name]"
     if [[ $(jq length <<<"$hubs") == 0 ]]; then
-      echo "  no hubs yet: links appear after ./vpn.sh hub add"
+      echo "  no hubs yet: links appear after ./vpn.sh control hub add"
       continue
     fi
     jq -r --arg t "$token" '.[] | "  \(.name):\n    import page:   https://\(.domain):\(.sub_port)/\($t)/\n    subscription:  https://\(.domain):\(.sub_port)/\($t)/sub"' <<<"$hubs"
@@ -160,9 +160,9 @@ cmd_control_hub() {
   case $action in
     add)
       check_name "$name" "hub name"
-      [[ -n $token ]] || die "usage: ./vpn.sh hub add NAME TOKEN (./vpn.sh control join on the hub prints it)"
+      [[ -n $token ]] || die "usage: ./vpn.sh control hub add NAME TOKEN (./vpn.sh hub control join on the hub prints it)"
       token_decode cvpn-hub "$token" | jq -e '.domain and .recipient and .public_key' >/dev/null 2>&1 ||
-        die "that's not a hub token: it starts with cvpn-hub: (./vpn.sh control join on the hub prints it)"
+        die "that's not a hub token: it starts with cvpn-hub: (./vpn.sh hub control join on the hub prints it)"
       conf_init "$HUBS_FILE" "$CONTROL_HUBS_HEADER"
       if control_hub_exists "$name"; then
         conf_rewrite "$HUBS_FILE" -v n="$name" '/^#/ || $1 != n'
@@ -171,7 +171,7 @@ cmd_control_hub() {
       echo "$name $token" >>"$HUBS_FILE"
       cmd_publish
       echo
-      echo "[$name] on the hub, once:  ./vpn.sh control set '$(control_token "$name")'"
+      echo "[$name] on the hub, once:  ./vpn.sh hub control set '$(control_token "$name")'"
       dns_enabled || echo "  then apply the snapshot there (see above)"
       echo
       ;;
@@ -185,18 +185,18 @@ cmd_control_hub() {
     token)
       check_name "$name" "hub name"
       control_hub_exists "$name" || die "no hub $name"
-      echo "[$name] on the hub:  ./vpn.sh control set '$(control_token "$name")'"
+      echo "[$name] on the hub:  ./vpn.sh hub control set '$(control_token "$name")'"
       ;;
     list)
       if [[ -z $(conf_rows "$HUBS_FILE") ]]; then
-        echo "No hubs yet. On a hub: ./vpn.sh control join, then here: ./vpn.sh hub add NAME TOKEN"
+        echo "No hubs yet. On a hub: ./vpn.sh hub control join, then here: ./vpn.sh control hub add NAME TOKEN"
         return
       fi
       printf '%-16s %-30s %s\n' HUB DOMAIN PORTS
       control_hubs_json | jq -r '.[] | "\(.name) \(.domain) vless:\(.vless_port) hy2:\(.hysteria_port) sub:\(.sub_port)"' |
         awk '{printf "%-16s %-30s %s %s %s\n", $1, $2, $3, $4, $5}'
       ;;
-    *) die "usage: ./vpn.sh hub add NAME TOKEN | token NAME | del NAME | list" ;;
+    *) die "usage: ./vpn.sh control hub add NAME TOKEN | token NAME | del NAME | list" ;;
   esac
 }
 
@@ -205,7 +205,7 @@ cmd_control_hub() {
 cmd_import() {
   local file=${1:-} json conflicts
   require_role control import
-  [[ -n $file ]] || die "usage: ./vpn.sh import FILE (from ./vpn.sh state export on the hub)"
+  [[ -n $file ]] || die "usage: ./vpn.sh control import FILE (from ./vpn.sh hub control export on the hub)"
   json=$(jq -ce 'select(.v == 1 and .kind == "export")' "$file" 2>/dev/null) || die "$file isn't a state export"
   conflicts=$(jq -r '[.users[][0]] | unique[]' <<<"$json" | while read -r name; do
     if user_exists "$name"; then echo "$name"; fi
@@ -252,22 +252,22 @@ cmd_control() {
       chmod 700 "$CONTROL_DIR"
       [[ -f $CONTROL_DIR/age.key ]] || age-keygen -o "$CONTROL_DIR/age.key" 2>/dev/null
       echo
-      echo "in control:  ./vpn.sh hub add NAME '$(hub_info_json |
+      echo "in control:  ./vpn.sh control hub add NAME '$(hub_info_json |
         jq --arg recipient "$(age-keygen -y "$CONTROL_DIR/age.key")" '{v: 1} + . + {recipient: $recipient}' |
         token_encode cvpn-hub)'"
       echo
       ;;
     set)
       json=$(token_decode cvpn-ctl "$token") && jq -e '.hub and .key' >/dev/null <<<"$json" ||
-        die "that's not a control token: it starts with cvpn-ctl: (./vpn.sh hub add in control prints it)"
-      [[ -f $CONTROL_DIR/age.key ]] || die "run ./vpn.sh control join first"
+        die "that's not a control token: it starts with cvpn-ctl: (./vpn.sh control hub add prints it)"
+      [[ -f $CONTROL_DIR/age.key ]] || die "run ./vpn.sh hub control join first"
       set_var HUB_NAME "$(jq -r .hub <<<"$json")"
       set_var CONTROL_KEY "$(jq -r .key <<<"$json")"
       set_var CONTROL_DOMAIN "$(jq -r '.domain // empty' <<<"$json")"
       info "hub $HUB_NAME is managed by control now: users and routes come from its snapshots"
       if [[ -z $CONTROL_DOMAIN ]]; then
         remove_sync_timer
-        echo "apply one: ./vpn.sh state apply < state.txt (users here are replaced by control's)"
+        echo "apply one: ./vpn.sh hub control apply < state.txt (users here are replaced by control's)"
         return
       fi
       install_sync_timer
@@ -279,7 +279,10 @@ cmd_control() {
       remove_sync_timer
       info "this hub manages its users itself again (it keeps those of the last snapshot)"
       ;;
-    *) die "usage: ./vpn.sh control join | set TOKEN | unset" ;;
+    sync) cmd_sync ;;
+    apply) state_apply "${2:--}" ;;
+    export) cmd_state export ;;
+    *) die "usage: $(vsh control) join | set TOKEN | sync | apply [FILE] | export | unset" ;;
   esac
 }
 
@@ -297,7 +300,7 @@ cmd_state() {
         {v: 1, kind: "export", users: $users, groups: $groups, routing: $routing, exits: $exits,
          settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name}}'
       ;;
-    *) die "usage: ./vpn.sh state apply [FILE] | export" ;;
+    *) die "usage: ./vpn.sh hub control apply [FILE] | export" ;;
   esac
 }
 
@@ -311,7 +314,7 @@ conf_from_json() {
 
 state_apply() {
   local src=$1 line sig data tmp json version applied
-  managed || die "this hub isn't managed by control: ./vpn.sh control join, then control set"
+  managed || die "this hub isn't managed by control: ./vpn.sh hub control join, then hub control set"
   need_pkg age "snapshots are encrypted with it"
   if [[ $src == - ]]; then line=$(tr -d ' \n\r'); else line=$(tr -d ' \n\r' <"$src"); fi
   [[ $line =~ ^cvpn-state1\.([A-Za-z0-9+/=]+)\.([A-Za-z0-9+/=]+)$ ]] || die "not a snapshot (cvpn-state1....)"
@@ -326,7 +329,7 @@ state_apply() {
   age -d -i "$CONTROL_DIR/age.key" "$tmp/data" 2>/dev/null | gunzip >"$tmp/json" 2>/dev/null ||
     die "can't decrypt the snapshot: this hub isn't among its recipients (hub add in control, then publish)"
   json=$(jq -ce 'select(.v == 1 and (.version | type) == "number" and (.users | type) == "array")' "$tmp/json") ||
-    die "the snapshot has an unknown format (update this hub: ./vpn.sh update repo)"
+    die "the snapshot has an unknown format (update this hub: ./vpn.sh hub update repo)"
 
   version=$(jq .version <<<"$json")
   applied=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
@@ -367,7 +370,7 @@ check_control() {
   if [[ -n $version ]]; then
     report control "ok (hub $HUB_NAME, snapshot v$version applied $(date -r "$CONTROL_DIR/version" '+%F %R'))"
   else
-    report control "FAIL: no snapshot applied yet (./vpn.sh ${CONTROL_DOMAIN:+sync}${CONTROL_DOMAIN:-state apply})"
+    report control "FAIL: no snapshot applied yet (./vpn.sh hub control ${CONTROL_DOMAIN:+sync}${CONTROL_DOMAIN:-apply})"
   fi
   check_sync
 }

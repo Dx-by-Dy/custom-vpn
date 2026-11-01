@@ -49,6 +49,9 @@ tmp_dir() {
   printf -v "$1" '%s' "$dir"
 }
 
+# A command of this server for hints: "./vpn.sh hub user add" (tree form)
+vsh() { echo "./vpn.sh ${ROLE:-$(env_role)} $*"; }
+
 # ROLE from the environment (ROLE=exit ./vpn.sh deploy) or .env, before load_env
 env_role() {
   local role=${ROLE:-}
@@ -58,7 +61,7 @@ env_role() {
 
 load_env() {
   [[ -f $ENV_FILE ]] || die "no $ENV_FILE: cp .env.example .env, then set DOMAIN"
-  grep -qE '^XRAY_(PORT|PRIVATE_KEY)=' "$ENV_FILE" && die "$ENV_FILE is from the xray version, run: ./vpn.sh init"
+  grep -qE '^XRAY_(PORT|PRIVATE_KEY)=' "$ENV_FILE" && die "$ENV_FILE is from the xray version, run: $(vsh init)"
   set -a; . "./$ENV_FILE"; set +a
   ROLE=${ROLE:-hub}
   # .env from before routes: everyone leaves from the hub, as before (empty means none)
@@ -194,7 +197,7 @@ render_jq() {
   local tpl=$1 out=$2 service=$3 var content
   shift 3
   for var in $(grep -o '\$ENV\.[A-Z0-9_]*' "$tpl" | cut -d. -f2 | sort -u); do
-    [[ -n ${!var:-} ]] || die "$var is empty (used in $tpl); new settings are added by: ./vpn.sh init"
+    [[ -n ${!var:-} ]] || die "$var is empty (used in $tpl); new settings are added by: $(vsh init)"
   done
   content=$(jq -n "$@" -f "$tpl") || die "can't render $tpl"
   write_file "$out" "$content" "$service"

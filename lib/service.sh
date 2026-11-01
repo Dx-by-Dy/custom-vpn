@@ -218,7 +218,7 @@ hy2_wait_cert() {
     sleep 5
   done
   if [[ ! -s $CERT ]]; then
-    warn "no certificate for $DOMAIN yet, hysteria is off; see ./vpn.sh logs, then run ./vpn.sh up"
+    warn "no certificate for $DOMAIN yet, hysteria is off; see ./vpn.sh hub logs, then run ./vpn.sh hub up"
     return
   fi
   CHANGED=()
@@ -277,7 +277,7 @@ check_hub_cert() {
 
   # Configs rendered before the certificate came have no hysteria
   if [[ -f $CERT ]] && ! jq -e '.inbounds | any(.type == "hysteria2")' "$OUT/sing-box.json" >/dev/null 2>&1; then
-    report hysteria "FAIL: off (no certificate when configs were rendered), run: ./vpn.sh up"
+    report hysteria "FAIL: off (no certificate when configs were rendered), run: ./vpn.sh hub up"
   fi
 
   if acme_path_ok; then

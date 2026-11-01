@@ -114,7 +114,7 @@ EOF
 
 install_timer() {
   if [[ $EUID -ne 0 ]] || ! command -v systemctl >/dev/null; then
-    warn "not root or no systemd: run ./vpn.sh prune and ./vpn.sh check yourself (e.g. from cron)"
+    warn "not root or no systemd: run $(vsh prune) and $(vsh check) yourself (e.g. from cron)"
     return
   fi
   # Older versions installed vpn-prune.*
@@ -156,8 +156,8 @@ cmd_install_docker() {
 }
 
 cmd_deploy() {
-  [[ $(env_role) != control ]] || die "control runs nothing: ./vpn.sh init sets it up"
-  command -v "$DOCKER" >/dev/null || die "$DOCKER not found, run: ./vpn.sh install-docker"
+  [[ $(env_role) != control ]] || die "control runs nothing: ./vpn.sh control init sets it up"
+  command -v "$DOCKER" >/dev/null || die "$DOCKER not found, run: $(vsh install-docker)"
   if [[ $EUID -eq 0 ]]; then cmd_tune; else warn "not root, skipping sysctl tuning"; fi
   cmd_init
   cmd_up

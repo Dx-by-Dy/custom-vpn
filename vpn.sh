@@ -26,114 +26,101 @@ ASSUME_YES=false
 # Commands of this ROLE only (all of them before there is a .env)
 usage() {
   local role
-  role=$(sed -n 's/^ROLE=//p' "$ENV_FILE" 2>/dev/null | tail -1)
+  role=${ROLE:-$(sed -n 's/^ROLE=//p' "$ENV_FILE" 2>/dev/null | tail -1)}
   # show "ROLES" <<EOF: the text if this role is one of ROLES
   show() { if [[ -z $role || " $1 " == *" $role "* ]]; then cat; else cat >/dev/null; fi; }
-  show "hub exit control" <<'EOF'
-Usage: ./vpn.sh <command> [args]
-
-EOF
-  show "hub exit client" <<'EOF'
-Setup:
-  deploy                  full setup: tune, init, up, maintenance timer, links
-                          (ROLE=exit ./vpn.sh deploy sets up an exit,
-                          ROLE=client CLIENT_SUB=LINK ./vpn.sh deploy a client)
-  init                    create .env, generate missing keys, create the first user
-  up                      render configs, check ports, start/restart containers
-  down                    stop containers
-  logs                    follow container logs
-  tune                    enable BBR and bigger UDP buffers (sysctl)
-  install-docker          install docker via get.docker.com
-  uninstall               remove everything vpn.sh set up on this host (asks what to keep)
-  firewall [--dry-run]    enable ufw for ssh, VPN ports and other listening
-                          services, optionally disable SSH password login
-
-EOF
-  show "client" <<'EOF'
-Client (ROLE=client): a local proxy (socks5 + http on CLIENT_LISTEN) through the
-hubs of the subscription CLIENT_SUB; RU leaves from the hub, the rest by the
-user's route
+  cat <<'EOF'
+Usage: ./vpn.sh ROLE OBJECT ACTION [args]
+  ROLE is this server's role (hub, exit, client, control); on a new server it
+  picks the role: ./vpn.sh exit deploy. The older form without ROLE works too.
 
 EOF
   show "control" <<'EOF'
-Control (ROLE=control, on a laptop): the scheme of all hubs; every change below
-is published as a signed snapshot that hubs apply
-  init                    create .env and the signing key (ROLE=control ./vpn.sh init)
-  hub add NAME TOKEN      add (or update) a hub from the token `control join` printed on it,
-                          print the token that hub needs
-  hub token NAME          print the token that hub needs again (e.g. after a new signing key)
-  hub del NAME            remove a hub: it can't read new snapshots
-  hub list                list hubs
-  publish                 build the snapshot again (generated/state.txt) and put it
-                          into DNS (CONTROL_DOMAIN in .env)
-  import FILE             take over the users of a stand-alone hub (`state export` there)
-
-EOF
-  show "hub control" <<'EOF'
-Users (hub, control):
-  user add NAME [--group G] [--route R]
-                          add a user and print their links
-  user del NAME           remove a user, their links stop working immediately
-  user list               list users
-  user route NAME ROUTE|- set the user's own route (- : the group's or ROUTE_DEFAULT)
-  user group NAME GROUP|- put the user into a group (- : no group)
-  links [NAME]            print subscription links (all users or one)
-  rotate NAME|--all [--grace HOURS]
-                          issue new credentials, the old ones keep working for
-                          HOURS (default 24) so clients can refresh the subscription
-
-Routes (hub, control): where traffic that isn't RU leaves; RU always leaves from the hub
-  exit add NAME TOKEN     add (or update) an exit from the token `hub add` printed on it;
-                          its egress IPs become routes NAME/IPNAME
-  exit del NAME           remove an exit
-  exit list               list exits and their routes
-  group add NAME [ROUTE]  add a group of users with a common route
-  group route NAME ROUTE|-
-                          change the group's route (- : ROUTE_DEFAULT)
-  group del NAME          remove an empty group
-  group list              list groups
-  route list              who leaves through which route
-                          Routes: local (the hub), none (no internet but RU), EXIT/IPNAME
+Control (the laptop): the scheme of every hub. Each change is published as a
+signed snapshot (DNS, CONTROL_DOMAIN in .env); hubs apply it within minutes.
+  ./vpn.sh control init                     .env and the signing key
+  ./vpn.sh control user add NAME [--group G] [--route R]
+  ./vpn.sh control user del NAME            the user's keys stop working on every hub
+  ./vpn.sh control user list
+  ./vpn.sh control user route NAME ROUTE|-  the user's own route (- : the group's or ROUTE_DEFAULT)
+  ./vpn.sh control user group NAME GROUP|-  put the user into a group (- : no group)
+  ./vpn.sh control user links [NAME]        subscription links on every hub
+  ./vpn.sh control user rotate NAME|--all [--grace HOURS]
+                                            new keys; the old ones work HOURS more (24)
+  ./vpn.sh control group add NAME [ROUTE]   a group of users with a common route
+  ./vpn.sh control group route NAME ROUTE|- (- : ROUTE_DEFAULT)
+  ./vpn.sh control group del NAME           (an empty one)
+  ./vpn.sh control group list
+  ./vpn.sh control exit add NAME TOKEN      an exit from `./vpn.sh exit hub add` there;
+                                            its IPs become routes NAME/IPNAME
+  ./vpn.sh control exit del NAME
+  ./vpn.sh control exit list
+  ./vpn.sh control route list               who leaves through which route
+                                            (local, none = RU only, EXIT/IPNAME)
+  ./vpn.sh control hub add NAME TOKEN       a hub from `./vpn.sh hub control join` there;
+                                            prints the token for `hub control set`
+  ./vpn.sh control hub token NAME           print that token again
+  ./vpn.sh control hub del NAME             the hub can't read new snapshots
+  ./vpn.sh control hub list
+  ./vpn.sh control publish                  build and publish the snapshot again
+  ./vpn.sh control import FILE              users of a stand-alone hub (`hub control export`)
+  ./vpn.sh control prune                    drop expired credentials, publish
 
 EOF
   show "hub" <<'EOF'
-Under control (hub): users, groups and routes come from control's snapshots
-  control join            print the token for `hub add` in control
-  control set TOKEN       trust the control that printed TOKEN (`hub add` there),
-                          read its snapshots from DNS (vpn-sync.timer, every 5 min)
-  control unset           manage users here again
-  sync                    read the snapshot from DNS now
-  state apply [FILE]      apply a snapshot by hand (stdin by default):
-                          ssh HUB './vpn.sh state apply' < state.txt
-  state export            print this stand-alone hub's users for `import` in control
+Hub: people connect here.
+  ./vpn.sh hub deploy                       full setup: tune, init, up, timer, links
+  ./vpn.sh hub control join                 print the token for `control hub add`
+  ./vpn.sh hub control set TOKEN            trust that control, take its snapshots from DNS
+                                            (vpn-sync.timer, every 5 min)
+  ./vpn.sh hub control sync                 take the snapshot from DNS now
+  ./vpn.sh hub control apply [FILE]         apply a snapshot by hand (stdin by default):
+                                            ssh HUB './vpn.sh hub control apply' < state.txt
+  ./vpn.sh hub control export               this stand-alone hub's users, for `control import`
+  ./vpn.sh hub control unset                manage users here again
+ Stand-alone (not under control): the same objects as in control, here
+  ./vpn.sh hub user add|del|list|route|group|links|rotate ...
+  ./vpn.sh hub group add|route|del|list ...
+  ./vpn.sh hub exit add|del|list ...
+ Under control these only show: user list, user links, group list, exit list, route list
+  ./vpn.sh hub route list                   who leaves through which route
 
 EOF
   show "exit" <<'EOF'
-Hubs (ROLE=exit):
-  hub add NAME            let hub NAME use this exit, print the token for it
-  hub token NAME          print the token again (with egress IPs added since)
-  hub del NAME            remove a hub, it can't connect anymore
-  hub list                list hubs
+Exit: hubs leave through it.
+  ./vpn.sh exit deploy                      full setup: tune, init, up, timer
+  ./vpn.sh exit hub add NAME                a token for hubs (one for all: main)
+  ./vpn.sh exit hub token NAME              print it again (with IPs added since)
+  ./vpn.sh exit hub del NAME                hubs with this token can't connect anymore
+  ./vpn.sh exit hub list
 
 EOF
-  show "hub exit" <<'EOF'
-Maintenance:
-  update images           upgrade sing-box / caddy images to the latest releases
-  update rules            download the RU lists again (hub; done daily by the timer)
-  update repo             update this repo's code from GitHub (keeps .env, users, certificates)
+  show "client" <<'EOF'
+Client: a local proxy (socks5 + http on CLIENT_LISTEN) through the hubs of CLIENT_SUB.
+  CLIENT_SUB=LINK ./vpn.sh client deploy    full setup (LINK: the user's subscription)
+  ./vpn.sh client refresh                   take the subscription again (hourly by the timer)
+
+EOF
+  show "hub exit client" <<EOF
+Every server (./vpn.sh ${role:-ROLE} ...):
+  init                    create .env, generate missing keys
+  up                      render configs, check ports, start/restart containers
+  down | logs             stop containers | follow their logs
+  check                   health of this server (hourly from vpn-maintenance.timer)
+  prune                   hourly upkeep: expired credentials, RU lists, subscription
   render                  render configs into generated/ and validate them
-  check                   check containers, certificate, Let's Encrypt path, REALITY target,
-                          routes (hub), egress IPs (exit)
-  prune                   drop expired credentials, refresh the RU lists
-                          (check and prune run hourly from vpn-maintenance.timer)
-EOF
-  show "control" <<'EOF'
-Maintenance:
-  prune                   drop expired credentials (and publish)
-EOF
-  show "hub exit control" <<'EOF'
-  help                    show this help
+  update images|repo|rules
+                          sing-box / caddy images; this code from GitHub (keeps keys,
+                          users, certificates); the RU lists (hub)
+  firewall [--dry-run]    ufw for ssh, the VPN ports and other listening services,
+                          optionally key-only SSH
+  tune                    BBR and bigger UDP buffers (sysctl)
+  install-docker          docker via get.docker.com
+  uninstall               remove what vpn.sh set up on this host (asks what to keep)
 
+EOF
+  cat <<'EOF'
+  help                    this help
 Options:
   -y                      answer yes to all questions
 EOF
@@ -164,8 +151,34 @@ set -- "${args[@]+"${args[@]}"}"
 
 cmd=${1:-help}
 (($#)) && shift
+# Tree form: ./vpn.sh ROLE OBJECT ACTION. The role word is this server's role; on
+# a server without .env it picks the role (./vpn.sh exit deploy). A role word
+# that is also an object here (exit / control on a hub, hub / exit in control,
+# hub on an exit) keeps meaning the object: ./vpn.sh exit add on a hub.
+if [[ " hub exit client control " == *" $cmd "* ]]; then
+  own=$(env_role)
+  if [[ ! -f $ENV_FILE ]]; then
+    [[ -z ${ROLE:-} || $ROLE == "$cmd" ]] || die "ROLE=$ROLE, but the command says $cmd"
+    export ROLE=$cmd
+    cmd=${1:-help}
+    (($#)) && shift
+  elif [[ $cmd == "$own" ]]; then
+    cmd=${1:-help}
+    (($#)) && shift
+  else
+    # Actions of the object with that name here; anything else is the other role's tree
+    case $own:$cmd in
+      hub:exit | control:exit) actions="add del list" ;;
+      hub:control) actions="join set unset sync apply export" ;;
+      control:hub | exit:hub) actions="add token del list" ;;
+      *) actions="" ;;
+    esac
+    [[ -n $actions && " $actions " == *" ${1:-add} "* ]] ||
+      die "./vpn.sh $cmd ${1:-} ... is for ROLE=$cmd, this server is ROLE=$own (./vpn.sh help)"
+  fi
+fi
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route | control | state | sync | publish | import) lock ;;
+  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | control | state | sync | publish | import) lock ;;
 esac
 # Control is a laptop: nothing to run or check there
 case $(env_role) in
@@ -177,7 +190,7 @@ case $(env_role) in
     ;;
   client)
     case $cmd in
-      deploy | init | up | down | logs | tune | install-docker | uninstall | firewall | render | check | prune | update | help | -h | --help) ;;
+      deploy | init | up | down | logs | tune | install-docker | uninstall | firewall | render | check | prune | refresh | update | help | -h | --help) ;;
       *) die "./vpn.sh $cmd isn't for ROLE=client (./vpn.sh help)" ;;
     esac
     ;;
@@ -207,6 +220,7 @@ case $cmd in
   update) cmd_update "$@" ;;
   render) cmd_render ;;
   prune) cmd_prune ;;
+  refresh) require_role client refresh; cmd_prune ;;
   check) cmd_check ;;
   help | -h | --help) usage ;;
   *) echo "unknown command: $cmd" >&2; usage >&2; exit 1 ;;

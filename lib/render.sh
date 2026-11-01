@@ -77,7 +77,7 @@ sub_outbounds() {
 
 cmd_render() {
   load_env
-  command -v jq >/dev/null || die "jq is not installed, run: ./vpn.sh init"
+  command -v jq >/dev/null || die "jq is not installed, run: $(vsh init)"
   if [[ $ROLE == exit ]]; then
     render_exit
     info "configs rendered to $OUT/"
@@ -90,7 +90,7 @@ cmd_render() {
   fi
   [[ $(printf '%s\n' "$VLESS_LISTEN_PORT" "$SUB_PORT" "$ACME_HTTP_PORT" | sort -u | wc -l) == 3 ]] ||
     die "VLESS_PORT (or the port of VLESS_LISTEN), SUB_PORT and ACME_HTTP_PORT must be different tcp ports"
-  [[ -n $(users_active) ]] || die "no users, run: ./vpn.sh init"
+  [[ -n $(users_active) ]] || die "no users, run: $(vsh init)"
 
   [[ -s $CERT ]] && HY2=true || HY2=false
   # Missing RU lists only; the timer refreshes them daily

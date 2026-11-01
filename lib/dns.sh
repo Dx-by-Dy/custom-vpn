@@ -128,7 +128,7 @@ dns_publish() {
       failed+=("$DNS_DOMAIN")
     fi
   done
-  ((ok > 0)) || die "the snapshot is in no DNS zone, run ./vpn.sh publish again"
+  ((ok > 0)) || die "the snapshot is in no DNS zone, run ./vpn.sh control publish again"
   ((${#failed[@]} == 0)) || warn "not published under: ${failed[*]} (hubs still read the others)"
 }
 
@@ -144,7 +144,7 @@ dns_publish_domain() {
     pieces+=("v$version-$i" "${line:i*DNS_PIECE:DNS_PIECE}")
   done
   dns_wait "${pieces[@]}" ||
-    die "the name servers of $DNS_ZONE don't show v$version yet; head is unchanged, run ./vpn.sh publish again"
+    die "the name servers of $DNS_ZONE don't show v$version yet; head is unchanged, run ./vpn.sh control publish again"
 
   old_head=$(awk -F'\t' '$1 == "head" {print $3; exit}' <<<"$records")
   dns_put head "$head" "$old_head"
@@ -173,7 +173,7 @@ cmd_sync() {
   local applied head v n sha line i piece d r answered=false newest=0
   require_role hub sync
   managed || die "this hub isn't managed by control"
-  dns_enabled || die "no CONTROL_DOMAIN: snapshots come by ssh only (./vpn.sh state apply)"
+  dns_enabled || die "no CONTROL_DOMAIN: snapshots come by ssh only (./vpn.sh hub control apply)"
   need_dig
   applied=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
   for d in $(control_domains); do
@@ -207,7 +207,7 @@ cmd_sync() {
 
 install_sync_timer() {
   if [[ $EUID -ne 0 ]] || ! command -v systemctl >/dev/null; then
-    warn "not root or no systemd: run ./vpn.sh sync every few minutes yourself (e.g. from cron)"
+    warn "not root or no systemd: run ./vpn.sh hub control sync every few minutes yourself (e.g. from cron)"
     return
   fi
   cat >/etc/systemd/system/vpn-sync.service <<EOF
@@ -249,13 +249,13 @@ check_sync() {
   domains=$(control_domains_line)
   [[ -n $domains ]] || return 0
   if [[ ! -f $SYNCED_FILE ]]; then
-    report dns "FAIL: not read from $domains yet (./vpn.sh sync)"
+    report dns "FAIL: not read from $domains yet (./vpn.sh hub control sync)"
     return
   fi
   age=$(($(date +%s) - $(date -r "$SYNCED_FILE" +%s)))
   if ((age <= SYNC_MAX_AGE)); then
     report dns "ok ($domains, read $((age / 60)) min ago)"
   else
-    report dns "FAIL: $domains unreadable for $((age / 60)) min (./vpn.sh sync)"
+    report dns "FAIL: $domains unreadable for $((age / 60)) min (./vpn.sh hub control sync)"
   fi
 }

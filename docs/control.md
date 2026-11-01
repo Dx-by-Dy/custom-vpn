@@ -3,7 +3,7 @@
 Control — это каталог репозитория на ноутбуке администратора. В нем вся схема: пользователи, группы, маршруты, exit'ы и хабы. Серверов, контейнеров и docker на ноутбуке нет: каждое изменение собирается в **снимок**, снимок публикуется в TXT-записях домена управления, а хабы сами забирают его оттуда каждые 5 минут.
 
 ```
-ноутбук: ./vpn.sh user add ivan  →  снимок v42  →  TXT в домене управления  →  хабы (≤ 5 мин + TTL)
+ноутбук: ./vpn.sh control user add ivan  →  снимок v42  →  TXT в домене управления  →  хабы (≤ 5 мин + TTL)
 ```
 
 Почему так: у системы нет «сервера управления», который можно заблокировать или взломать, а DNS доступен почти всегда. Хаб применяет снимок, только если он подписан ключом этого control, расшифровывается ключом хаба и новее того, что уже применен; иначе хаб работает на последнем хорошем снимке. Подробно — [ARCHITECTURE.md](../ARCHITECTURE.md), раздел «Управление».
@@ -21,7 +21,7 @@ sudo apt install jq age dnsutils        # Debian / Ubuntu
 
 ```sh
 git clone https://github.com/Dx-by-Dy/custom-vpn.git ~/vpn-control && cd ~/vpn-control
-ROLE=control ./vpn.sh init
+./vpn.sh control init
 ```
 
 `init` создает `.env` (права 600), ключ подписи `data/control/sign` и пустые списки. В `.env`:
@@ -40,8 +40,8 @@ ROLE=control ./vpn.sh init
 Проверить, что все готово:
 
 ```sh
-./vpn.sh help        # команды control
-./vpn.sh publish     # пока нет хабов: "no hubs yet"
+./vpn.sh control help        # команды control
+./vpn.sh control publish     # пока нет хабов: "no hubs yet"
 ```
 
 ## Первая схема
@@ -54,40 +54,40 @@ ROLE=control ./vpn.sh init
 
 ```sh
 # на exit'е
-./vpn.sh hub add main            # печатает cvpn-exit:...
+./vpn.sh exit hub add main            # печатает cvpn-exit:...
 # в control
-./vpn.sh exit add cz1 'cvpn-exit:...'
-./vpn.sh exit list               # cz1  109.172.8.54:443  cz1/ip1=… cz1/ip2=…
+./vpn.sh control exit add cz1 'cvpn-exit:...'
+./vpn.sh control exit list               # cz1  109.172.8.54:443  cz1/ip1=… cz1/ip2=…
 ```
 
-IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (имена IP — из `EXIT_IPS` на exit'е). Токен расходится по всем хабам в снимке; exit о хабах ничего не знает. Тот же `exit add` с новым токеном обновляет exit (после смены IP: на exit'е `./vpn.sh hub token main`).
+IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (имена IP — из `EXIT_IPS` на exit'е). Токен расходится по всем хабам в снимке; exit о хабах ничего не знает. Тот же `exit add` с новым токеном обновляет exit (после смены IP: на exit'е `./vpn.sh control hub token main`).
 
 ### Хаб
 
 Новый хаб (на нем еще нет пользователей):
 
 ```sh
-# на хабе, после ./vpn.sh deploy
-./vpn.sh control join                        # печатает cvpn-hub:...
+# на хабе, после ./vpn.sh hub deploy
+./vpn.sh hub control join                        # печатает cvpn-hub:...
 # в control
-./vpn.sh hub add hub1 'cvpn-hub:...'         # публикует снимок, печатает cvpn-ctl:...
+./vpn.sh control hub add hub1 'cvpn-hub:...'         # публикует снимок, печатает cvpn-ctl:...
 # на хабе
-./vpn.sh control set 'cvpn-ctl:...'          # сразу берет снимок из DNS, ставит vpn-sync.timer
+./vpn.sh hub control set 'cvpn-ctl:...'          # сразу берет снимок из DNS, ставит vpn-sync.timer
 ```
 
-`cvpn-hub:` — адрес, порты и публичный ключ REALITY хаба плюс его ключ шифрования снимков (секрета в нем нет). `cvpn-ctl:` — имя хаба, публичный ключ подписи control и `CONTROL_DOMAIN`. Напечатать `cvpn-ctl:` еще раз — `./vpn.sh hub token hub1`.
+`cvpn-hub:` — адрес, порты и публичный ключ REALITY хаба плюс его ключ шифрования снимков (секрета в нем нет). `cvpn-ctl:` — имя хаба, публичный ключ подписи control и `CONTROL_DOMAIN`. Напечатать `cvpn-ctl:` еще раз — `./vpn.sh control hub token hub1`.
 
 Хаб, который уже работал сам по себе (пользователи и их ссылки сохранятся):
 
 ```sh
 # на хабе
-./vpn.sh state export > /root/export.json    # все ключи пользователей: перенести и удалить
-./vpn.sh control join
+./vpn.sh hub control export > /root/export.json    # все ключи пользователей: перенести и удалить
+./vpn.sh hub control join
 # в control
-./vpn.sh import export.json                  # пользователи, группы, маршруты, exit'ы хаба
-./vpn.sh hub add hub1 'cvpn-hub:...'
+./vpn.sh control import export.json                  # пользователи, группы, маршруты, exit'ы хаба
+./vpn.sh control hub add hub1 'cvpn-hub:...'
 # на хабе
-./vpn.sh control set 'cvpn-ctl:...'
+./vpn.sh hub control set 'cvpn-ctl:...'
 ```
 
 `import` отказывается, если такие пользователи в control уже есть, и предупреждает, если `ROUTE_DEFAULT` / `SUB_NAME` хаба отличаются от control (в снимок пойдут значения control).
@@ -97,17 +97,17 @@ IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (им�
 ### Пользователи
 
 ```sh
-./vpn.sh group add sales cz1/ip1           # группа с общим маршрутом
-./vpn.sh user add ivan --group sales       # или --route cz1/ip2, или без маршрута (ROUTE_DEFAULT)
-./vpn.sh links ivan                        # ссылки ivan на каждом хабе
-./vpn.sh route list                        # кто через какой маршрут выходит и почему
+./vpn.sh control group add sales cz1/ip1           # группа с общим маршрутом
+./vpn.sh control user add ivan --group sales       # или --route cz1/ip2, или без маршрута (ROUTE_DEFAULT)
+./vpn.sh control user links ivan                        # ссылки ivan на каждом хабе
+./vpn.sh control route list                        # кто через какой маршрут выходит и почему
 ```
 
 Ссылку любого хаба можно отдавать человеку: подписка каждого хаба содержит все хабы (этот первым), и если один хаб недоступен, приложение переключается на другой. Импорт — страница `https://<хаб>:8443/<token>/` с кнопками для Hiddify, NekoBox, V2Box, или ссылка `…/sub` в любое приложение.
 
 ## Что происходит при каждой команде
 
-Любая команда, которая меняет схему (`user`, `group`, `exit`, `hub`, `rotate`, `import`, `prune`), в конце делает `publish`:
+Любая команда, которая меняет схему (`user`, `group`, `exit`, `hub`, `import`, `prune`), в конце делает `publish`:
 
 1. снимок: JSON со всеми списками → gzip → `age` (по ключу на каждый хаб) → подпись `ssh-keygen -Y sign`; одна строка в `generated/state.txt`;
 2. версия — время публикации (`date +%s`), только растет (`data/control/version`);
@@ -120,7 +120,7 @@ IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (им�
 >> in DNS: head.ctl.specterite.ru -> v1793570121 (3 TXT records); hubs take it within 5 min + TTL 300s
 ```
 
-Хаб раз в 5 минут (`vpn-sync.timer`) читает `head` через резолверы по очереди — системный, 77.88.8.8, 1.1.1.1, 8.8.8.8 — сверяет куски с sha256 из `head`, проверяет подпись, расшифровывает, сверяет версию и применяет: перезаписывает `users.conf`, `groups.conf`, `routing.conf`, `exits.conf`, `ROUTE_DEFAULT`, `SUB_NAME` и перезапускает sing-box (соединения рвутся на секунду). Сразу, не дожидаясь таймера: `./vpn.sh sync` на хабе.
+Хаб раз в 5 минут (`vpn-sync.timer`) читает `head` через резолверы по очереди — системный, 77.88.8.8, 1.1.1.1, 8.8.8.8 — сверяет куски с sha256 из `head`, проверяет подпись, расшифровывает, сверяет версию и применяет: перезаписывает `users.conf`, `groups.conf`, `routing.conf`, `exits.conf`, `ROUTE_DEFAULT`, `SUB_NAME` и перезапускает sing-box (соединения рвутся на секунду). Сразу, не дожидаясь таймера: `./vpn.sh hub control sync` на хабе.
 
 Снаружи видно, что в зоне есть TXT-записи, их число, размер и время смены. Содержимое зашифровано, подделать его без ключа подписи нельзя.
 
@@ -128,31 +128,31 @@ IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (им�
 
 | Задача | Команды |
 |---|---|
-| новый сотрудник | `user add NAME [--group G]`, `links NAME` |
+| новый сотрудник | `user add NAME [--group G]`, `user links NAME` |
 | сотрудник ушел | `user del NAME` — ключи перестают работать на всех хабах после применения снимка |
 | сменить выход человеку | `user route NAME cz1/ip2`; `-` — снова маршрут группы |
 | сменить выход отделу | `group route sales il1/ip1` |
 | перевести в другую группу | `user group NAME sales`; `-` — без группы |
-| плановая смена ключей | `rotate NAME` или `rotate --all --grace 48`: старые ключи работают еще 24 (48) часа, приложения успевают обновить подписку |
+| плановая смена ключей | `user rotate NAME` или `user rotate --all --grace 48`: старые ключи работают еще 24 (48) часа, приложения успевают обновить подписку |
 | ссылка утекла | `user del NAME` + `user add NAME` (новый токен подписки), отправить новую ссылку |
-| новый exit | на exit'е `hub add main`, здесь `exit add NAME TOKEN` |
+| новый exit | на exit'е `exit hub add main`, здесь `exit add NAME TOKEN` |
 | exit сломался | `check` на хабах падает на его маршрутах, трафик этих людей никуда не уходит (переключения на другой IP нет). Временно: `group route` / `user route` на другой маршрут |
-| новый хаб | `deploy` и `control join` на нем, здесь `hub add`, на нем `control set` |
+| новый хаб | `hub deploy` и `hub control join` на нем, здесь `hub add`, на нем `hub control set` |
 | хаб заблокирован / выведен | `hub del NAME`: он не прочитает следующие снимки, из подписок остальных хабов он пропадет при следующем обновлении |
 | посмотреть схему | `user list`, `group list`, `exit list`, `hub list`, `route list` |
 
 ## Домен управления
 
-- **Сменить домен** (на хабах ничего делать не нужно): дописать новый домен в `CONTROL_DOMAIN` (`CONTROL_DOMAIN="new.ru old.ru"`), `./vpn.sh publish` — снимок ляжет в оба, хабы узнают новый список из снимка и начнут читать оба. Через пару дней убрать старый из `CONTROL_DOMAIN` и снова `publish`. Записи в старом домене можно потом удалить в панели.
+- **Сменить домен** (на хабах ничего делать не нужно): дописать новый домен в `CONTROL_DOMAIN` (`CONTROL_DOMAIN="new.ru old.ru"`), `./vpn.sh control publish` — снимок ляжет в оба, хабы узнают новый список из снимка и начнут читать оба. Через пару дней убрать старый из `CONTROL_DOMAIN` и снова `publish`. Записи в старом домене можно потом удалить в панели.
 - **Резерв**: два домена в разных зонах (лучше — у разных регистраторов и DNS-хостингов) — хаб берет снимок из того, что ответит.
-- **Первое подключение хаба**: если хаб спросил `head` раньше, чем снимок для него опубликован, системный резолвер хаба может до часа помнить «такой записи нет». Хаб пройдет к следующим резолверам и все равно получит снимок; поэтому порядок — сначала `hub add` здесь, потом `control set` на хабе.
+- **Первое подключение хаба**: если хаб спросил `head` раньше, чем снимок для него опубликован, системный резолвер хаба может до часа помнить «такой записи нет». Хаб пройдет к следующим резолверам и все равно получит снимок; поэтому порядок — сначала `hub add` здесь, потом `hub control set` на хабе.
 
 ## Без DNS: по ssh
 
 Если `CONTROL_DOMAIN` пуст, зона недоступна или изменение нужно прямо сейчас:
 
 ```sh
-ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt
+ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < generated/state.txt
 ```
 
 Проверки те же (подпись, ключ хаба, версия), так что повторное применение или старый файл ничего не испортят.
@@ -160,8 +160,8 @@ ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt
 ## Что проверять
 
 - На каждом хабе `./vpn.sh check` (его же раз в час запускает таймер): строки `control` (версия и время примененного снимка) и `dns` (когда DNS читался последний раз; `FAIL`, если больше часа).
-- Хаб не берет снимок: `./vpn.sh sync` на хабе покажет причину — `can't read head…` (DNS), `pieces are missing or don't match head` (куски еще не разошлись по кэшам — подождать TTL), `isn't signed by this hub's control` (другой ключ подписи), `can't decrypt` (хаб не в получателях: `hub add` здесь).
-- `publish` упал на DNS: `can't log in` — `DNS_USER` / `DNS_PASSWORD`; `… isn't in any zone` — домена нет в аккаунте; `the name servers … don't show v… yet; head is unchanged` — панель не успела обновить NS, просто повторить `./vpn.sh publish` (новая версия, хабы не пострадали). Снимок при этом все равно лежит в `generated/state.txt` — его можно применить по ssh.
+- Хаб не берет снимок: `./vpn.sh hub control sync` на хабе покажет причину — `can't read head…` (DNS), `pieces are missing or don't match head` (куски еще не разошлись по кэшам — подождать TTL), `isn't signed by this hub's control` (другой ключ подписи), `can't decrypt` (хаб не в получателях: `hub add` здесь).
+- `publish` упал на DNS: `can't log in` — `DNS_USER` / `DNS_PASSWORD`; `… isn't in any zone` — домена нет в аккаунте; `the name servers … don't show v… yet; head is unchanged` — панель не успела обновить NS, просто повторить `./vpn.sh control publish` (новая версия, хабы не пострадали). Снимок при этом все равно лежит в `generated/state.txt` — его можно применить по ssh.
 
 ## Бэкап и потеря ноутбука
 
@@ -172,8 +172,8 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 ```
 
 - **Ноутбук потерян, ключ не утек** (диск зашифрован): восстановить каталог из бэкапа на новом ноутбуке — хабы продолжат принимать снимки.
-- **Ключ подписи мог утечь**: удалить `data/control/sign*`, `./vpn.sh init` (новый ключ), затем для каждого хаба `./vpn.sh hub token NAME` и на хабе `./vpn.sh control set 'cvpn-ctl:...'` — хаб перестанет доверять старому ключу. Сменить пароль DNS-панели. Если утекли и списки (`users.conf`) — `rotate --all`.
-- **Бэкапа нет**: на любом хабе `control unset`, `state export` → `import` в новый control, затем подключить хабы заново (как «хаб, который уже работал»).
+- **Ключ подписи мог утечь**: удалить `data/control/sign*`, `./vpn.sh control init` (новый ключ), затем для каждого хаба `./vpn.sh control hub token NAME` и на хабе `./vpn.sh hub control set 'cvpn-ctl:...'` — хаб перестанет доверять старому ключу. Сменить пароль DNS-панели. Если утекли и списки (`users.conf`) — `user rotate --all`.
+- **Бэкапа нет**: на любом хабе `hub control unset`, `hub control export` → `import` в новый control, затем подключить хабы заново (как «хаб, который уже работал»).
 
 ## Обновление кода
 
@@ -181,17 +181,17 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 
 ## Команды control
 
-| `./vpn.sh …` | |
+| `./vpn.sh control …` | |
 |---|---|
-| `init` | `.env`, ключ подписи, пустые списки (`ROLE=control ./vpn.sh init` в первый раз) |
+| `init` | `.env`, ключ подписи, пустые списки (`./vpn.sh control init` в первый раз) |
 | `user add NAME [--group G] [--route R]` / `del` / `list` | пользователи |
 | `user route NAME R\|-`, `user group NAME G\|-` | свой маршрут, группа |
 | `group add NAME [R]` / `route NAME R\|-` / `del` / `list` | группы |
 | `exit add NAME TOKEN` / `del` / `list` | exit'ы и их маршруты `NAME/IP` |
 | `route list` | кто через что выходит |
 | `hub add NAME TOKEN` / `token NAME` / `del NAME` / `list` | хабы |
-| `links [NAME]` | ссылки пользователя на каждом хабе |
-| `rotate NAME\|--all [--grace H]` | новые ключи, старые работают еще H часов |
-| `import FILE` | забрать пользователей самостоятельного хаба (`state export` на нем) |
+| `user links [NAME]` | ссылки пользователя на каждом хабе |
+| `user rotate NAME\|--all [--grace H]` | новые ключи, старые работают еще H часов |
+| `import FILE` | забрать пользователей самостоятельного хаба (`hub control export` на нем) |
 | `publish` | собрать и опубликовать снимок заново (без изменений — новая версия того же) |
 | `prune` | удалить из схемы ключи с истекшей отсрочкой ротации и опубликовать |

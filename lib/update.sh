@@ -18,7 +18,7 @@ cmd_update() {
       rule_sets_refresh 0
       info "RU lists: $(rule_sets_json | jq -r 'join(", ")') ($RULE_SETS_DIR)"
       ;;
-    *) die "usage: ./vpn.sh update images|repo|rules" ;;
+    *) die "usage: $(vsh update) images|repo|rules" ;;
   esac
 }
 

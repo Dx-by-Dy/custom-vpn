@@ -153,7 +153,7 @@ rule_sets_update() {
       if [[ -s $file ]]; then
         warn "can't download the $tag list, keeping the one from $(date -r "$file" +%F)"
       else
-        warn "can't download the $tag list (./vpn.sh update rules): until it's there, fewer sites count as RU"
+        warn "can't download the $tag list (./vpn.sh hub update rules): until it's there, fewer sites count as RU"
       fi
     fi
   done
@@ -184,9 +184,9 @@ cmd_exit() {
   case $action in
     add)
       check_name "$name" "exit name"
-      [[ -n $token ]] || die "usage: ./vpn.sh exit add NAME TOKEN (./vpn.sh hub add|token on the exit prints it)"
+      [[ -n $token ]] || die "usage: $(vsh exit add) NAME TOKEN (./vpn.sh exit hub add|token on the exit prints it)"
       token_json "$token" >/dev/null ||
-        die "that's not an exit token: it starts with cvpn-exit: (./vpn.sh hub add|token on the exit prints it)"
+        die "that's not an exit token: it starts with cvpn-exit: (./vpn.sh exit hub add|token on the exit prints it)"
       conf_init "$EXITS_FILE" "$EXITS_HEADER"
       if exit_exists "$name"; then
         # Routes the new token doesn't have any more
@@ -222,7 +222,7 @@ cmd_exit() {
       ;;
     list)
       if [[ -z $(conf_rows "$EXITS_FILE") ]]; then
-        echo "No exits yet. On the exit: ./vpn.sh hub add NAME, then here: ./vpn.sh exit add EXIT_NAME TOKEN"
+        echo "No exits yet. On the exit: ./vpn.sh exit hub add NAME, then here: $(vsh exit add) EXIT_NAME TOKEN"
         return
       fi
       printf '%-16s %-28s %s\n' EXIT ADDRESS ROUTES
@@ -231,7 +231,7 @@ cmd_exit() {
           awk '{printf "%-16s %-28s", $1, $2; for (i = 3; i <= NF; i++) printf " %s", $i; print ""}'
       done < <(conf_rows "$EXITS_FILE")
       ;;
-    *) die "usage: ./vpn.sh exit add NAME TOKEN | del NAME | list" ;;
+    *) die "usage: $(vsh exit) add NAME TOKEN | del NAME | list" ;;
   esac
 }
 
@@ -248,12 +248,12 @@ cmd_group() {
       conf_init "$GROUPS_FILE" "$GROUPS_HEADER"
       echo "$name $route" >>"$GROUPS_FILE"
       [[ $ROLE != control ]] || cmd_publish
-      info "group $name added (route: ${route/#-/ROUTE_DEFAULT}); add users: ./vpn.sh user group USER $name"
+      info "group $name added (route: ${route/#-/ROUTE_DEFAULT}); add users: $(vsh user group) USER $name"
       ;;
     route)
       check_name "$name" "group name"
       group_exists "$name" || die "no group $name"
-      [[ -n $route ]] || die "usage: ./vpn.sh group route NAME ROUTE|-"
+      [[ -n $route ]] || die "usage: $(vsh group route) NAME ROUTE|-"
       check_route "$route" dash-ok
       conf_rewrite "$GROUPS_FILE" -v n="$name" -v r="$route" '!/^#/ && $1 == n {$2 = r} {print}'
       cmd_up
@@ -263,14 +263,14 @@ cmd_group() {
       check_name "$name" "group name"
       group_exists "$name" || die "no group $name"
       members=$(conf_rows "$ROUTING_FILE" | awk -v g="$name" '$2 == g {printf "%s%s", (n++ ? " " : ""), $1}')
-      [[ -z $members ]] || die "group $name has users: $members (./vpn.sh user group USER - or another group)"
+      [[ -z $members ]] || die "group $name has users: $members ($(vsh user group) USER - or another group)"
       conf_rewrite "$GROUPS_FILE" -v n="$name" '/^#/ || $1 != n'
       [[ $ROLE != control ]] || cmd_publish
       info "group $name removed"
       ;;
     list)
       if [[ -z $(conf_rows "$GROUPS_FILE") ]]; then
-        echo "No groups yet. Add one: ./vpn.sh group add NAME [ROUTE]"
+        echo "No groups yet. Add one: $(vsh group add) NAME [ROUTE]"
         return
       fi
       awk '
@@ -281,14 +281,14 @@ cmd_group() {
           for (i = 1; i <= n; i++) printf "%-20s %-20s%s\n", order[i], route[order[i]], members[order[i]]
         }' <(conf_rows "$GROUPS_FILE") <(conf_rows "$ROUTING_FILE")
       ;;
-    *) die "usage: ./vpn.sh group add NAME [ROUTE] | route NAME ROUTE|- | del NAME | list" ;;
+    *) die "usage: $(vsh group) add NAME [ROUTE] | route NAME ROUTE|- | del NAME | list" ;;
   esac
 }
 
 cmd_route() {
   local where
   require_role "hub control" route
-  case ${1:-} in
+  case ${1:-list} in
     list)
       user_routes | awk -v def="${ROUTE_DEFAULT:-none}" '
         BEGIN { printf "%-20s %-16s %-20s %s\n", "USER", "GROUP", "ROUTE", "FROM" }
@@ -302,7 +302,7 @@ cmd_route() {
       if [[ $ROLE == control ]]; then where="always leaves from the hub the user is connected to"; else where="leaves from this hub for everyone"; fi
       echo "RU (.ru .su .рф, Russian services, Russian IPs) $where."
       ;;
-    *) die "usage: ./vpn.sh route list" ;;
+    *) die "usage: $(vsh route list)" ;;
   esac
 }
 
@@ -344,7 +344,7 @@ check_routes() {
   for entry in "${RULE_SETS[@]}"; do
     tag=${entry%% *} file=$RULE_SETS_DIR/$tag.srs
     if [[ ! -s $file ]]; then
-      report ru-lists "FAIL: no $tag list (./vpn.sh update rules)"
+      report ru-lists "FAIL: no $tag list (./vpn.sh hub update rules)"
       continue
     fi
     age=$((($(date +%s) - $(stat -c %Y "$file")) / 86400))

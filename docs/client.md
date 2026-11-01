@@ -6,16 +6,16 @@
 
 ```sh
 # в control: отдельный пользователь под этот сервер
-./vpn.sh user add ci-runner --route cz1/ip1
-./vpn.sh links ci-runner                   # ссылка на подписку на каждом хабе
+./vpn.sh control user add ci-runner --route cz1/ip1
+./vpn.sh control user links ci-runner                   # ссылка на подписку на каждом хабе
 
 # на сервере
 git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn && cd /opt/custom-vpn
-./vpn.sh install-docker                    # если docker еще нет
-ROLE=client CLIENT_SUB='https://cdn.specterite.ru:8443/<token>/sub https://cdn2.specterite.ru:8443/<token>/sub' ./vpn.sh deploy
+./vpn.sh client install-docker                    # если docker еще нет
+CLIENT_SUB='https://cdn.specterite.ru:8443/<token>/sub https://cdn2.specterite.ru:8443/<token>/sub' ./vpn.sh client deploy
 ```
 
-`CLIENT_SUB` — ссылка на подписку или страницу импорта; можно несколько через пробел (ссылки разных хабов) — клиент берет первую, которая ответит. `CLIENT_LISTEN=127.0.0.1:2080` можно задать тут же или потом в `.env` (затем `./vpn.sh up`).
+`CLIENT_SUB` — ссылка на подписку или страницу импорта; можно несколько через пробел (ссылки разных хабов) — клиент берет первую, которая ответит. `CLIENT_LISTEN=127.0.0.1:2080` можно задать тут же или потом в `.env` (затем `./vpn.sh client up`).
 
 ## Использование
 
@@ -31,13 +31,13 @@ export HTTPS_PROXY=http://127.0.0.1:2080 HTTP_PROXY=http://127.0.0.1:2080   # д
 
 - Хабы отдают для каждого пользователя `…/<token>/sing-box.json` — VLESS REALITY и Hysteria 2 каждого хаба. Клиент кладет копию в `data/client/sub.json` и собирает `generated/sing-box.json`: `mixed` на `CLIENT_LISTEN` → `urltest` между всеми хабами (каждые 3 минуты меряет RU-адрес — то есть сам хаб) → самый быстрый.
 - Если хаб пропал, через несколько минут трафик идет через другой; когда вернется — обратно на быстрейший.
-- `vpn-maintenance.timer` раз в час (`prune`) обновляет подписку и перезапускает sing-box, если хабы или ключи поменялись (новый хаб, `rotate`). Если ни один `CLIENT_SUB` не отвечает — работает на последней копии.
+- `vpn-maintenance.timer` раз в час (`prune`) обновляет подписку и перезапускает sing-box, если хабы или ключи поменялись (новый хаб, `user rotate`). Если ни один `CLIENT_SUB` не отвечает — работает на последней копии.
 - Подписка с любого хаба содержит все хабы, поэтому новый хаб клиент подхватит сам.
 
 ## Проверка
 
 ```sh
-./vpn.sh check
+./vpn.sh client check
 ```
 
 ```
@@ -51,5 +51,5 @@ proxy        ok (127.0.0.1:2080: RU leaves as 91.219.150.99, the rest as 109.172
 ## Безопасность
 
 - Прокси слушает только localhost. `CLIENT_LISTEN=0.0.0.0:2080` открыл бы его всем — тогда только за firewall'ом.
-- `data/client/sub.json` — ключи пользователя (права 600). Утекли — в control `user del` + `user add`, новый `CLIENT_SUB` здесь (`.env`, затем `./vpn.sh up`).
-- Убрать: `./vpn.sh uninstall`.
+- `data/client/sub.json` — ключи пользователя (права 600). Утекли — в control `user del` + `user add`, новый `CLIENT_SUB` здесь (`.env`, затем `./vpn.sh client up`).
+- Убрать: `./vpn.sh client uninstall`.

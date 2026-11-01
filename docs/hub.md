@@ -18,16 +18,16 @@ Caddy получает сертификат на `DOMAIN` и продлевае�
 
    ```sh
    git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn && cd /opt/custom-vpn
-   ./vpn.sh install-docker             # если docker еще нет
+   ./vpn.sh hub install-docker             # если docker еще нет
    cp .env.example .env && nano .env   # DOMAIN; ROUTE_DEFAULT (см. «Маршруты»)
-   ./vpn.sh deploy                     # sysctl, ключи, пользователь default, запуск, таймер, ссылки
+   ./vpn.sh hub deploy                     # sysctl, ключи, пользователь default, запуск, таймер, ссылки
    ```
 
 3. Под control — сразу подключить ([control.md](control.md#хаб)):
 
    ```sh
-   ./vpn.sh control join               # cvpn-hub:... → в control: ./vpn.sh hub add hub2 '...'
-   ./vpn.sh control set 'cvpn-ctl:...' # из вывода hub add; снимок приходит сразу
+   ./vpn.sh hub control join               # cvpn-hub:... → в control: ./vpn.sh control hub add hub2 '...'
+   ./vpn.sh hub control set 'cvpn-ctl:...' # из вывода control hub add; снимок приходит сразу
    ```
 
 `up` перед запуском проверяет, что `VLESS_PORT`/tcp, `HYSTERIA_PORT`/udp, `SUB_PORT`/tcp и `ACME_HTTP_PORT`/tcp не заняты чужими процессами, и если заняты — пишет кем и что делать, ничего не запуская. `SUB_PORT` и `HYSTERIA_PORT` можно просто поменять (`SUB_PORT` входит в ссылки — после смены подписку импортируют заново). После запуска `up` проверяет, что порт 80 действительно доводит запросы Let's Encrypt до caddy.
@@ -54,14 +54,14 @@ RU (имена `.ru .su .рф`, список `geosite-category-ru`, россий
 На самостоятельном хабе:
 
 ```sh
-./vpn.sh exit add cz1 'cvpn-exit:...'   # токен от ./vpn.sh hub add на exit'е
-./vpn.sh group add sales cz1/ip1
-./vpn.sh user add ivan --group sales    # или --route cz1/ip2
-./vpn.sh user route ivan cz1/ip2        # свой маршрут сильнее группы; - — снова маршрут группы
-./vpn.sh route list
+./vpn.sh hub exit add cz1 'cvpn-exit:...'   # токен от ./vpn.sh exit hub add на exit'е
+./vpn.sh hub group add sales cz1/ip1
+./vpn.sh hub user add ivan --group sales    # или --route cz1/ip2
+./vpn.sh hub user route ivan cz1/ip2        # свой маршрут сильнее группы; - — снова маршрут группы
+./vpn.sh hub route list
 ```
 
-- Списки RU — от SagerNet в `data/rule-sets/`, таймер обновляет их раз в сутки (`./vpn.sh update rules` — сразу); если GitHub с хаба недоступен, они скачиваются через exit.
+- Списки RU — от SagerNet в `data/rule-sets/`, таймер обновляет их раз в сутки (`./vpn.sh hub update rules` — сразу); если GitHub с хаба недоступен, они скачиваются через exit.
 - Что уходит с хаба, хаб резолвит сам (и блокирует имена, указывающие на приватные сети и на него самого). На exit уходит имя, exit резолвит его сам, из своей страны.
 
 ## Пользователи и подписки
@@ -69,39 +69,39 @@ RU (имена `.ru .su .рф`, список `geosite-category-ru`, россий
 На самостоятельном хабе (под control — то же самое делается в control):
 
 ```sh
-./vpn.sh user add vasya    # создать и показать ссылки (+ QR, если стоит qrencode)
-./vpn.sh links vasya       # ссылки еще раз
-./vpn.sh user del vasya    # ключи и подписка перестают работать сразу
-./vpn.sh rotate vasya      # новые ключи, старые работают еще 24 часа (--grace H)
+./vpn.sh hub user add vasya    # создать и показать ссылки (+ QR, если стоит qrencode)
+./vpn.sh hub user links vasya       # ссылки еще раз
+./vpn.sh hub user del vasya    # ключи и подписка перестают работать сразу
+./vpn.sh hub user rotate vasya      # новые ключи, старые работают еще 24 часа (--grace H)
 ```
 
 - `https://DOMAIN:8443/<token>/sub` — подписка (base64-список `vless://` + `hysteria2://`) для любого приложения; приложения сами ее обновляют. Под control в ней все хабы снимка (этот первым, `SUB_NAME-hub1-reality`, `SUB_NAME-hub1-hy2`, ...).
 - `https://DOMAIN:8443/<token>/` — страница с кнопками импорта в Hiddify, NekoBox, V2Box.
 - `https://DOMAIN:8443/<token>/sing-box.json` — те же хабы outbound'ами sing-box (для [client](client.md)).
 - Все, кроме токенов пользователей, отдает 404. Изменение пользователей перезапускает sing-box — у всех на секунду рвется соединение.
-- Ротация не меняет ссылку: пока старые ключи работают, приложение обновляет подписку через живой туннель. Если **утекла ссылка** — `rotate` не поможет, нужны `user del` + `user add`.
+- Ротация не меняет ссылку: пока старые ключи работают, приложение обновляет подписку через живой туннель. Если **утекла ссылка** — `user rotate` не поможет, нужны `user del` + `user add`.
 
 ## Под control
 
-- Пользователи, группы, маршруты, exit'ы, `ROUTE_DEFAULT` и `SUB_NAME` приходят снимками; команды, которые их меняют, здесь отказывают (`user list`, `route list`, `links` работают).
-- `vpn-sync.timer` раз в 5 минут читает `head.<CONTROL_DOMAIN>` через резолверы `CONTROL_RESOLVERS` (по умолчанию `system 77.88.8.8 1.1.1.1 8.8.8.8`); `./vpn.sh sync` — сразу. Список доменов управления приходит в снимке, менять его здесь не нужно.
-- Снимок вручную, если DNS недоступен: `./vpn.sh state apply < state.txt` (с ноутбука: `ssh root@хаб 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt`).
-- `./vpn.sh control unset` — снова управлять пользователями здесь (остаются пользователи последнего снимка), таймер снимается.
+- Пользователи, группы, маршруты, exit'ы, `ROUTE_DEFAULT` и `SUB_NAME` приходят снимками; команды, которые их меняют, здесь отказывают (`user list`, `route list`, `user links` работают).
+- `vpn-sync.timer` раз в 5 минут читает `head.<CONTROL_DOMAIN>` через резолверы `CONTROL_RESOLVERS` (по умолчанию `system 77.88.8.8 1.1.1.1 8.8.8.8`); `./vpn.sh hub control sync` — сразу. Список доменов управления приходит в снимке, менять его здесь не нужно.
+- Снимок вручную, если DNS недоступен: `./vpn.sh hub control apply < state.txt` (с ноутбука: `ssh root@хаб 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < generated/state.txt`).
+- `./vpn.sh hub control unset` — снова управлять пользователями здесь (остаются пользователи последнего снимка), таймер снимается.
 - Ключ шифрования снимков хаба — `data/control/age.key`; он есть только на этом хабе.
 
 ## Проверка
 
 ```sh
-./vpn.sh check
+./vpn.sh hub check
 ```
 
 Контейнеры; срок сертификата (меньше 14 дней — продления не проходят); путь Let's Encrypt через 80; доступность `REALITY_SNI`; `sni-proxy` (если `VLESS_LISTEN`); под control — `control` (версия снимка) и `dns` (когда DNS читался); каждый маршрут — с какого IP выходит (`local`, каждый `EXIT/IP`), что `none` никуда не выходит, что RU выходит с хаба; свежесть списков RU. `vpn-maintenance.timer` раз в час делает `prune` и `check`; сбой виден в `systemctl --failed` и `journalctl -u vpn-maintenance`.
 
 ## Бэкап
 
-`.env` (ключи REALITY), а у самостоятельного хаба еще `users.conf`, `exits.conf`, `groups.conf`, `routing.conf`; под control — `data/control/age.key` (без него хаб не прочитает снимки: тогда `control join` заново и `hub add` в control). С этими файлами на новом сервере клиенты продолжают работать — достаточно перенести A-запись.
+`.env` (ключи REALITY), а у самостоятельного хаба еще `users.conf`, `exits.conf`, `groups.conf`, `routing.conf`; под control — `data/control/age.key` (без него хаб не прочитает снимки: тогда `hub control join` заново и `control hub add` в control). С этими файлами на новом сервере клиенты продолжают работать — достаточно перенести A-запись.
 
 ## Переезд со старых версий
 
-- **xray + hysteria этого репозитория**: `./vpn.sh update repo` — `init` переименует ключи в `.env` (`XRAY_PORT` → `VLESS_PORT`, `XRAY_*_KEY` → `REALITY_*`), `up` заменит контейнеры на sing-box; ключи и ссылки прежние. Установка с `REALITY_XVER=1` (маскировка под свой сайт) остановится на `init` с подсказкой: sing-box не передает сайту PROXY protocol — нужен другой `REALITY_SNI` или SNI-маршрутизация.
-- **systemd-установка** xray / hysteria: `systemctl disable --now xray hysteria-server`, затем `./vpn.sh deploy`. Однопользовательский `.env` (`XRAY_UUID` / `HYSTERIA_PASSWORD` / `SUB_TOKEN`) станет пользователем `default` с той же подпиской.
+- **xray + hysteria этого репозитория**: `./vpn.sh hub update repo` — `init` переименует ключи в `.env` (`XRAY_PORT` → `VLESS_PORT`, `XRAY_*_KEY` → `REALITY_*`), `up` заменит контейнеры на sing-box; ключи и ссылки прежние. Установка с `REALITY_XVER=1` (маскировка под свой сайт) остановится на `init` с подсказкой: sing-box не передает сайту PROXY protocol — нужен другой `REALITY_SNI` или SNI-маршрутизация.
+- **systemd-установка** xray / hysteria: `systemctl disable --now xray hysteria-server`, затем `./vpn.sh hub deploy`. Однопользовательский `.env` (`XRAY_UUID` / `HYSTERIA_PASSWORD` / `SUB_TOKEN`) станет пользователем `default` с той же подпиской.

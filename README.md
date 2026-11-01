@@ -13,7 +13,7 @@
 
 ## Роли
 
-Один `vpn.sh` на всех, роль записана в `.env` (`ROLE=…`); `./vpn.sh help` показывает команды своей роли.
+Один `vpn.sh` на всех, роль записана в `.env` (`ROLE=…`). Команды — деревом «роль → объект → действие»: `./vpn.sh control user add ivan`, `./vpn.sh hub control join`, `./vpn.sh exit hub add main`. Первое слово — роль этого сервера (на новом сервере оно эту роль и выбирает: `./vpn.sh exit deploy`), поэтому по команде видно, где ее запускать. `./vpn.sh help` показывает дерево своей роли. Старая форма без роли (`./vpn.sh user add ivan`) тоже работает.
 
 | Роль | Где | Что делает | Документация |
 |---|---|---|---|
@@ -26,37 +26,37 @@
 
 ## Развертывание каскада с нуля
 
-1. **Exit'ы** — на каждом: `ROLE=exit ./vpn.sh deploy`, затем `./vpn.sh hub add main` (токен `cvpn-exit:…`). [docs/exit.md](docs/exit.md)
-2. **Control** — на ноутбуке: `ROLE=control ./vpn.sh init`, в `.env` — домен управления и доступ к DNS-панели; `./vpn.sh exit add cz1 'cvpn-exit:…'` для каждого exit'а. [docs/control.md](docs/control.md)
-3. **Хабы** — A-запись домена → IP, на сервере `./vpn.sh deploy` и `./vpn.sh control join` (токен `cvpn-hub:…`); в control `./vpn.sh hub add hub1 'cvpn-hub:…'` (токен `cvpn-ctl:…`); на хабе `./vpn.sh control set 'cvpn-ctl:…'`. [docs/hub.md](docs/hub.md)
-4. **Люди** — в control: `./vpn.sh group add sales cz1/ip1`, `./vpn.sh user add ivan --group sales`, `./vpn.sh links ivan` — ссылку отправить человеку.
-5. **Серверы-клиенты** — в control пользователь со своим маршрутом, на сервере `ROLE=client CLIENT_SUB='<ссылка>' ./vpn.sh deploy`. [docs/client.md](docs/client.md)
+1. **Exit'ы** — на каждом: `./vpn.sh exit deploy`, затем `./vpn.sh exit hub add main` (токен `cvpn-exit:…`). [docs/exit.md](docs/exit.md)
+2. **Control** — на ноутбуке: `./vpn.sh control init`, в `.env` — домен управления и доступ к DNS-панели; `./vpn.sh control exit add cz1 'cvpn-exit:…'` для каждого exit'а. [docs/control.md](docs/control.md)
+3. **Хабы** — A-запись домена → IP, на сервере `./vpn.sh hub deploy` и `./vpn.sh hub control join` (токен `cvpn-hub:…`); в control `./vpn.sh control hub add hub1 'cvpn-hub:…'` (токен `cvpn-ctl:…`); на хабе `./vpn.sh hub control set 'cvpn-ctl:…'`. [docs/hub.md](docs/hub.md)
+4. **Люди** — в control: `./vpn.sh control group add sales cz1/ip1`, `./vpn.sh control user add ivan --group sales`, `./vpn.sh control user links ivan` — ссылку отправить человеку.
+5. **Серверы-клиенты** — в control пользователь со своим маршрутом, на сервере `CLIENT_SUB='<ссылка>' ./vpn.sh client deploy`. [docs/client.md](docs/client.md)
 
-Код на серверы — `git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn`; docker, если его нет, — `./vpn.sh install-docker`.
+Код на серверы — `git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn`; docker, если его нет, — `./vpn.sh ROLE install-docker` (например, `./vpn.sh hub install-docker`).
 
 ## Общее для всех серверов
 
 ### Проверка
 
-`./vpn.sh check` — здоровье этого сервера (что именно проверяется, см. документацию роли). `vpn-maintenance.timer` раз в час запускает `prune` и `check`; сбой виден в `systemctl --failed` и `journalctl -u vpn-maintenance`.
+`./vpn.sh ROLE check` — здоровье этого сервера (что именно проверяется, см. документацию роли). `vpn-maintenance.timer` раз в час запускает `prune` и `check`; сбой виден в `systemctl --failed` и `journalctl -u vpn-maintenance`.
 
 ### Обновление
 
 ```sh
-./vpn.sh update repo     # новый код с GitHub (ключи, пользователи, сертификаты остаются)
-./vpn.sh update images   # новые версии sing-box / caddy (откат, если не взлетело)
-./vpn.sh update rules    # хаб: скачать списки RU заново (таймер делает это раз в сутки)
+./vpn.sh hub update repo     # новый код с GitHub (ключи, пользователи, сертификаты остаются)
+./vpn.sh hub update images   # новые версии sing-box / caddy (откат, если не взлетело)
+./vpn.sh hub update rules    # хаб: скачать списки RU заново (таймер делает это раз в сутки)
 ```
 
 `update repo` показывает новые коммиты и изменяемые файлы, спрашивает, бэкапит `.env` и списки в `backups/` и сверяет их после. Локальные правки отслеживаемых файлов (шаблоны, `compose.yaml`) теряются — об этом предупредит. Каталог без git при первом запуске становится git-checkout'ом. Control обновляется `git pull`; если меняется формат снимка — сначала хабы, потом control.
 
-Настройки: правка `.env` (или `templates/*`), затем `./vpn.sh up`.
+На exit'е и клиенте — то же с `exit` / `client` вместо `hub`. Настройки: правка `.env` (или `templates/*`), затем `./vpn.sh ROLE up`.
 
 ### Firewall
 
 ```sh
-./vpn.sh firewall --dry-run   # план
-./vpn.sh firewall             # ufw
+./vpn.sh exit firewall --dry-run   # план (на хабе — ./vpn.sh hub firewall ...)
+./vpn.sh exit firewall             # ufw
 ```
 
 Открывает ssh (порт из sshd), порты этой роли и спрашивает про остальные сервисы, которые слушают публичные адреса (сайт и т. п., по умолчанию оставляет). Все остальное входящее закрывается. Затем предлагает отключить вход по SSH-паролю — только если в `authorized_keys` есть ключи.
@@ -64,8 +64,8 @@
 ### Удаление
 
 ```sh
-./vpn.sh uninstall      # спрашивает, что оставить
-./vpn.sh uninstall -y   # все до чистого состояния
+./vpn.sh hub uninstall      # спрашивает, что оставить
+./vpn.sh hub uninstall -y   # все до чистого состояния
 ```
 
 Всегда убирает контейнеры, таймеры (`vpn-maintenance`, `vpn-sync`) и настройки sysctl (возвращает прежние значения). Спрашивает про образы, правила ufw, вход по SSH-паролю, ключи и пользователей (по умолчанию остаются — `deploy` поднимет тот же VPN с теми же ссылками) и docker. Что менялось на хосте, записано в `/var/lib/custom-vpn`. Каталог репозитория остается.
@@ -81,20 +81,30 @@
 
 ## Команды
 
-`./vpn.sh help` — список для роли этого сервера. Сводка:
+`./vpn.sh help` — дерево команд роли этого сервера. Сводка:
 
-| `./vpn.sh …` | Роли | |
-|---|---|---|
-| `deploy` | hub, exit, client | `tune` + `init` + `up` + таймер (+ ссылки / токены) |
-| `init` | все | `.env`, ключи; control — ключ подписи |
-| `up` / `down` / `logs` | hub, exit, client | собрать конфиги и запустить / остановить / логи; в control `up` = `publish` |
-| `check` | hub, exit, client | здоровье |
-| `prune` | все | хаб: просроченные ключи и списки RU; client: обновить подписку; control: почистить и опубликовать |
-| `user …`, `group …`, `exit …`, `route list`, `links`, `rotate` | control, hub | схема (на хабе под control — только просмотр) |
-| `hub add\|token\|del\|list` | control | хабы схемы |
-| `hub add\|token\|del\|list` | exit | токены хабов этого exit'а |
-| `publish`, `import FILE` | control | опубликовать снимок; забрать пользователей хаба |
-| `control join\|set\|unset`, `sync`, `state apply\|export` | hub | работа под control |
-| `update repo\|images\|rules`, `firewall`, `tune`, `render`, `install-docker`, `uninstall` | серверы | обслуживание |
+```
+./vpn.sh control  init
+                  user   add NAME [--group G] [--route R] | del NAME | list
+                         route NAME ROUTE|- | group NAME GROUP|- | links [NAME]
+                         rotate NAME|--all [--grace HOURS]
+                  group  add NAME [ROUTE] | route NAME ROUTE|- | del NAME | list
+                  exit   add NAME TOKEN | del NAME | list
+                  hub    add NAME TOKEN | token NAME | del NAME | list
+                  route  list
+                  publish | import FILE | prune
 
-`-y` — ответить «да» на все вопросы (для скриптов).
+./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
+                  control join | set TOKEN | sync | apply [FILE] | export | unset
+                  user …, group …, exit …, route list      (как в control; под control — только просмотр)
+                  update repo|images|rules | firewall [--dry-run] | tune | install-docker | uninstall
+
+./vpn.sh exit     deploy | init | up | down | logs | check | prune | render
+                  hub    add NAME | token NAME | del NAME | list
+                  update repo|images | firewall [--dry-run] | tune | install-docker | uninstall
+
+./vpn.sh client   deploy | init | up | down | logs | check | refresh | render
+                  update repo|images | firewall [--dry-run] | tune | install-docker | uninstall
+```
+
+`-y` — ответить «да» на все вопросы (для скриптов). Старые имена тоже работают: `links` = `user links`, `rotate` = `user rotate`, `sync` / `state apply` / `state export` = `control sync` / `apply` / `export` на хабе, `prune` = `refresh` на клиенте.
