@@ -42,14 +42,17 @@ vpn_ports() {
 }
 
 # nginx config that owns VLESS_PORT and passes REALITY_SNI on to sing-box on
-# VLESS_LISTEN, everything else to the sites (moved to a local port)
+# VLESS_LISTEN, DOMAIN to caddy (its own certificate, 404 but for subscriptions;
+# otherwise a probe of DOMAIN:443 would get a site's certificate), everything
+# else to the sites (moved to a local port)
 sni_proxy_snippet() {
   cat <<EOF
       # /etc/nginx/nginx.conf, top level (needs libnginx-mod-stream):
       stream {
-          # by SNI: REALITY_SNI -> sing-box, everything else -> the sites
+          # by SNI: REALITY_SNI -> sing-box, DOMAIN -> caddy, everything else -> the sites
           map \$ssl_preread_server_name \$sni_backend {
               $REALITY_SNI 127.0.0.1:4441;
+              $DOMAIN 127.0.0.1:4442;
               default 127.0.0.1:4443;
           }
           server {
@@ -60,10 +63,14 @@ sni_proxy_snippet() {
               # the sites see the real client address
               proxy_protocol on;
           }
-          # sing-box doesn't read the PROXY protocol header: drop it here
+          # sing-box and caddy here don't read the PROXY protocol header: drop it
           server {
               listen 127.0.0.1:4441 proxy_protocol;
               proxy_pass ${VLESS_LISTEN_HOST/#::/127.0.0.1}:$VLESS_LISTEN_PORT;
+          }
+          server {
+              listen 127.0.0.1:4442 proxy_protocol;
+              proxy_pass 127.0.0.1:$SUB_PORT;
           }
       }
       # each site: instead of "listen 443 ssl" / "listen [::]:443 ssl":
@@ -252,12 +259,15 @@ cmd_check() {
     report reality "FAIL: can't reach $REALITY_SNI via $REALITY_TARGET, VLESS is down"
   fi
   # Through the proxy in front: only sing-box (REALITY passes the handshake on to
-  # the target) answers SNI REALITY_SNI with a valid certificate, a site wouldn't
+  # the target) answers SNI REALITY_SNI with a valid certificate, a site wouldn't;
+  # SNI DOMAIN gets caddy (its certificate, 404), not a site's certificate
   if [[ -n ${VLESS_LISTEN:-} ]]; then
-    if curl -s -o /dev/null -m 8 --connect-to "$REALITY_SNI:443:127.0.0.1:$VLESS_PORT" "https://$REALITY_SNI/"; then
-      report sni-proxy "ok ($VLESS_PORT passes $REALITY_SNI to sing-box)"
-    else
+    if ! curl -s -o /dev/null -m 8 --connect-to "$REALITY_SNI:443:127.0.0.1:$VLESS_PORT" "https://$REALITY_SNI/"; then
       report sni-proxy "FAIL: $REALITY_SNI on $VLESS_PORT doesn't reach sing-box on $VLESS_LISTEN"
+    elif [[ $(curl -s -o /dev/null -m 8 -w '%{http_code}' --connect-to "$DOMAIN:443:127.0.0.1:$VLESS_PORT" "https://$DOMAIN/") != 404 ]]; then
+      report sni-proxy "FAIL: $DOMAIN on $VLESS_PORT doesn't reach caddy (a site's certificate?): map it to caddy, see the 443/tcp section of docs/hub.md"
+    else
+      report sni-proxy "ok ($VLESS_PORT passes $REALITY_SNI to sing-box, $DOMAIN to caddy)"
     fi
   fi
   if [[ $ROLE == hub ]]; then check_routes; else check_egress; fi
