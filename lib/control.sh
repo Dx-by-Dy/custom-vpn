@@ -44,6 +44,21 @@ SUB_NAME=SVOi
 EOF
     chmod 600 "$ENV_FILE"
   fi
+  grep -q '^CONTROL_DOMAIN=' "$ENV_FILE" || cat >>"$ENV_FILE" <<'EOF'
+
+# Snapshots go into TXT records under CONTROL_DOMAIN (a domain of its own, or a
+# subdomain of DNS_ZONE); hubs read them from there. Empty: by ssh only
+# (./vpn.sh state apply on each hub). Hubs learn it from `hub add`'s token.
+CONTROL_DOMAIN=
+# DNSmanager (ISPsystem) API of the zone, e.g. https://dns-01.example.ru:1501/dnsmgr
+DNS_API=
+# The zone in DNSmanager that holds CONTROL_DOMAIN (default: CONTROL_DOMAIN)
+DNS_ZONE=
+DNS_USER=
+DNS_PASSWORD=
+# TTL of the records, seconds: hubs see a new snapshot within 5 min + TTL
+DNS_TTL=300
+EOF
   load_env
   need_pkg age "snapshots are encrypted with it"
   mkdir -p "$CONTROL_DIR"
@@ -54,6 +69,7 @@ EOF
   fi
   users_init
   conf_init "$HUBS_FILE" "$CONTROL_HUBS_HEADER"
+  [[ -n ${CONTROL_DOMAIN:-} ]] || warn "CONTROL_DOMAIN is empty: snapshots go to hubs by ssh only (see $ENV_FILE)"
   info "control is ready: add exits (./vpn.sh exit add), hubs (./vpn.sh hub add), users"
 }
 
@@ -70,7 +86,8 @@ control_hubs_json() {
 
 # The token a hub needs to trust control
 control_token() {
-  jq -n --arg hub "$1" --arg key "$(cat "$CONTROL_DIR/sign.pub")" '{v: 1, hub: $hub, key: $key}' |
+  jq -n --arg hub "$1" --arg key "$(cat "$CONTROL_DIR/sign.pub")" --arg domain "${CONTROL_DOMAIN:-}" '
+    {v: 1, hub: $hub, key: $key} + (if $domain != "" then {domain: $domain} else {} end)' |
     token_encode cvpn-ctl
 }
 
@@ -110,7 +127,11 @@ cmd_publish() {
   mv "$STATE_FILE.tmp" "$STATE_FILE"
   echo "$version" >"$CONTROL_DIR/version"
   info "snapshot v$version for $(jq -r 'map(.name) | join(", ")' <<<"$hubs"): $STATE_FILE ($(wc -c <"$STATE_FILE") bytes)"
-  echo "   on each hub: ssh HUB 'cd /opt/custom-vpn && ./vpn.sh state apply' < $STATE_FILE"
+  if dns_enabled; then
+    dns_publish "$version"
+  else
+    echo "   on each hub: ssh HUB 'cd /opt/custom-vpn && ./vpn.sh state apply' < $STATE_FILE"
+  fi
 }
 
 # Subscription links of a user on every hub (control's `links`)
@@ -150,7 +171,7 @@ cmd_control_hub() {
       cmd_publish
       echo
       echo "[$name] on the hub, once:  ./vpn.sh control set '$(control_token "$name")'"
-      echo "  then apply the snapshot there (see above)"
+      dns_enabled || echo "  then apply the snapshot there (see above)"
       echo
       ;;
     del)
@@ -239,12 +260,20 @@ cmd_control() {
       [[ -f $CONTROL_DIR/age.key ]] || die "run ./vpn.sh control join first"
       set_var HUB_NAME "$(jq -r .hub <<<"$json")"
       set_var CONTROL_KEY "\"$(jq -r .key <<<"$json")\""
+      set_var CONTROL_DOMAIN "$(jq -r '.domain // empty' <<<"$json")"
       info "hub $HUB_NAME is managed by control now: users and routes come from its snapshots"
-      echo "apply one: ./vpn.sh state apply < state.txt (users here are replaced by control's)"
+      if [[ -z $CONTROL_DOMAIN ]]; then
+        remove_sync_timer
+        echo "apply one: ./vpn.sh state apply < state.txt (users here are replaced by control's)"
+        return
+      fi
+      install_sync_timer
+      cmd_sync
       ;;
     unset)
       managed || die "this hub isn't managed by control"
-      sed -i -E '/^(CONTROL_KEY|HUB_NAME)=/d' "$ENV_FILE"
+      sed -i -E '/^(CONTROL_KEY|HUB_NAME|CONTROL_DOMAIN)=/d' "$ENV_FILE"
+      remove_sync_timer
       info "this hub manages its users itself again (it keeps those of the last snapshot)"
       ;;
     *) die "usage: ./vpn.sh control join | set TOKEN | unset" ;;
@@ -325,6 +354,7 @@ check_control() {
   if [[ -n $version ]]; then
     report control "ok (hub $HUB_NAME, snapshot v$version applied $(date -r "$CONTROL_DIR/version" '+%F %R'))"
   else
-    report control "FAIL: no snapshot applied yet (./vpn.sh state apply)"
+    report control "FAIL: no snapshot applied yet (./vpn.sh ${CONTROL_DOMAIN:+sync}${CONTROL_DOMAIN:-state apply})"
   fi
+  check_sync
 }

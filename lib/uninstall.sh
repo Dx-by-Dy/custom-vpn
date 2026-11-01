@@ -19,7 +19,7 @@ cmd_uninstall() {
   fi
 
   local unit
-  for unit in vpn-maintenance vpn-prune; do
+  for unit in vpn-maintenance vpn-prune vpn-sync; do
     [[ -f /etc/systemd/system/$unit.timer ]] || continue
     systemctl disable -q --now "$unit.timer" 2>/dev/null || true
     rm -f /etc/systemd/system/"$unit".{timer,service}

@@ -133,15 +133,16 @@ set_var() {
 
 singbox_cli() { "$DOCKER" run --rm "$SINGBOX_IMAGE" "$@"; }
 
-# Install a missing command from the package of the same name, asking first
+# need_pkg CMD WHY [APT_PKG [DNF_PKG]]: install a missing command (from the
+# package of the same name by default), asking first
 need_pkg() {
-  local pkg=$1 why=$2
-  command -v "$pkg" >/dev/null && return
-  command -v dnf >/dev/null && die "$pkg is not installed ($why): sudo dnf install $pkg"
-  command -v apt-get >/dev/null || die "$pkg is not installed ($why)"
-  ask "$pkg is not installed ($why). Install it?" y || die "$pkg is required"
+  local cmd=$1 why=$2 apt=${3:-$1} dnf=${4:-${3:-$1}}
+  command -v "$cmd" >/dev/null && return
+  command -v dnf >/dev/null && die "$cmd is not installed ($why): sudo dnf install $dnf"
+  command -v apt-get >/dev/null || die "$cmd is not installed ($why)"
+  ask "$cmd is not installed ($why). Install $apt?" y || die "$cmd is required"
   local out
-  out=$(DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" 2>&1) || die "can't install $pkg: $out"
+  out=$(DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$apt" 2>&1) || die "can't install $apt: $out"
 }
 
 # Services whose config changed during render (they need a restart)

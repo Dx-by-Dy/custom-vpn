@@ -56,7 +56,8 @@ is published as a signed snapshot that hubs apply
                           print the token that hub needs
   hub del NAME            remove a hub: it can't read new snapshots
   hub list                list hubs
-  publish                 build the snapshot again (generated/state.txt)
+  publish                 build the snapshot again (generated/state.txt) and put it
+                          into DNS (CONTROL_DOMAIN in .env)
   import FILE             take over the users of a stand-alone hub (`state export` there)
 
 EOF
@@ -90,9 +91,12 @@ EOF
   show "hub" <<'EOF'
 Under control (hub): users, groups and routes come from control's snapshots
   control join            print the token for `hub add` in control
-  control set TOKEN       trust the control that printed TOKEN (`hub add` there)
+  control set TOKEN       trust the control that printed TOKEN (`hub add` there),
+                          read its snapshots from DNS (vpn-sync.timer, every 5 min)
   control unset           manage users here again
-  state apply [FILE]      apply a snapshot (stdin by default): ssh HUB './vpn.sh state apply' < state.txt
+  sync                    read the snapshot from DNS now
+  state apply [FILE]      apply a snapshot by hand (stdin by default):
+                          ssh HUB './vpn.sh state apply' < state.txt
   state export            print this stand-alone hub's users for `import` in control
 
 EOF
@@ -139,6 +143,7 @@ EOF
 . lib/exit.sh
 . lib/routes.sh
 . lib/control.sh
+. lib/dns.sh
 
 # --- main --------------------------------------------------------------------
 
@@ -151,7 +156,7 @@ set -- "${args[@]+"${args[@]}"}"
 cmd=${1:-help}
 (($#)) && shift
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route | control | state | publish | import) lock ;;
+  deploy | init | up | render | user | rotate | prune | update | firewall | uninstall | hub | exit | group | route | control | state | sync | publish | import) lock ;;
 esac
 # Control is a laptop: nothing to run or check there
 if [[ $(env_role) == control ]]; then
@@ -177,6 +182,7 @@ case $cmd in
   route) cmd_route "$@" ;;
   control) cmd_control "$@" ;;
   state) cmd_state "$@" ;;
+  sync) cmd_sync ;;
   publish) require_role control publish; cmd_publish ;;
   import) cmd_import "$@" ;;
   links) cmd_links "$@" ;;

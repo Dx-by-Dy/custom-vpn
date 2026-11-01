@@ -104,13 +104,27 @@ ROLE=exit ./vpn.sh deploy  # ключи, EXIT_IPS, запуск
 
 ## Управление с ноутбука (ROLE=control)
 
-Пользователи, группы, маршруты и exit'ы всех хабов можно вести в одном месте — на ноутбуке. Каждое изменение собирается в снимок: JSON → gzip → `age` (свой ключ у каждого хаба) → подпись `ssh-keygen -Y sign`. Хаб применяет снимок, только если он подписан его control, расшифровывается его ключом и новее примененного; иначе остается как есть. Как это устроено целиком — [ARCHITECTURE.md](ARCHITECTURE.md). Пока снимок переносится вручную (`state apply` по ssh), доставка через DNS — следующий этап.
+Пользователи, группы, маршруты и exit'ы всех хабов можно вести в одном месте — на ноутбуке. Каждое изменение собирается в снимок: JSON → gzip → `age` (свой ключ у каждого хаба) → подпись `ssh-keygen -Y sign`. Хаб применяет снимок, только если он подписан его control, расшифровывается его ключом и новее примененного; иначе остается как есть. Снимок публикуется в TXT-записях домена управления через API dnsmanage (DNSmanager ISPsystem), хабы читают его оттуда каждые 5 минут; без домена управления снимок переносится по ssh (`state apply`). Как это устроено целиком — [ARCHITECTURE.md](ARCHITECTURE.md).
 
-На ноутбуке нужны `jq`, `age` (`sudo dnf install age` / `apt install age`) и `ssh-keygen`; docker не нужен. Отдельная копия репозитория:
+На ноутбуке нужны `jq`, `age`, `dig` и `ssh-keygen` (`sudo dnf install age bind-utils` / `apt install age dnsutils`); docker не нужен. Отдельная копия репозитория:
 
 ```sh
 git clone https://github.com/Dx-by-Dy/custom-vpn.git ~/vpn-control && cd ~/vpn-control
 ROLE=control ./vpn.sh init       # .env и ключ подписи data/control/sign
+```
+
+В `.env` — куда публиковать (файл только для владельца, пароль панели живет только здесь):
+
+```sh
+CONTROL_DOMAIN=ctl.example.ru                 # под ним будут head.… и v<версия>-<i>.…
+DNS_API=https://dns-01.smartape.ru:1501/dnsmgr
+DNS_ZONE=example.ru                           # зона в dnsmanage (по умолчанию = CONTROL_DOMAIN)
+DNS_USER=...
+DNS_PASSWORD=...
+DNS_TTL=300
+```
+
+```sh
 ./vpn.sh exit add cz1 'cvpn-exit:...'
 ```
 
@@ -122,16 +136,18 @@ ROLE=control ./vpn.sh init       # .env и ключ подписи data/control/
 ./vpn.sh control join                        # печатает cvpn-hub:...
 # на ноутбуке:
 ./vpn.sh import export.json                  # пользователи хаба с теми же ключами — ссылки не меняются
-./vpn.sh hub add hub1 'cvpn-hub:...'         # печатает cvpn-ctl:... и собирает снимок
+./vpn.sh hub add hub1 'cvpn-hub:...'         # печатает cvpn-ctl:..., публикует снимок
 # на хабе:
-./vpn.sh control set 'cvpn-ctl:...'
+./vpn.sh control set 'cvpn-ctl:...'          # сразу берет снимок из DNS, ставит vpn-sync.timer
 ```
 
-Дальше все меняется на ноутбуке теми же командами (`user add`, `group`, `exit add`, `rotate`, ...), после каждой — новый снимок в `generated/state.txt`:
+Дальше все меняется на ноутбуке теми же командами (`user add`, `group`, `exit add`, `rotate`, ...): после каждой новый снимок уходит в DNS (около 10 секунд), хабы применяют его в течение 5 минут + `DNS_TTL`. Сразу — `./vpn.sh sync` на хабе. Без DNS (или если зона недоступна) — вручную:
 
 ```sh
 ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt
 ```
+
+- Хаб читает `head` через резолверы по очереди: системный, 77.88.8.8, 1.1.1.1, 8.8.8.8 (`CONTROL_RESOLVERS` в `.env` хаба). Куски сверяются с sha256 из `head`, затем подпись и версия — как у `state apply`; что не прошло, не применяется. `check` падает, если DNS не читается больше часа.
 
 - На хабе под control команды, меняющие пользователей и маршруты, отказывают; `user list`, `route list`, `links` работают. `check` показывает версию примененного снимка. `control unset` — вернуть хаб к самостоятельному управлению (пользователи последнего снимка остаются).
 - `hub del` в control — хаб не сможет прочитать следующие снимки (последний примененный у него остается).
@@ -225,7 +241,8 @@ ssh root@hub1 'cd /opt/custom-vpn && ./vpn.sh state apply' < generated/state.txt
 | `route list`                        | кто через какой маршрут выходит                                          |
 | `control join\|set\|unset`           | хаб под управлением control (ноутбука)                                   |
 | `state apply [FILE]` / `state export` | применить снимок control / выгрузить пользователей для `import`        |
-| `hub add\|del\|list`, `publish`, `import` | в `ROLE=control`: хабы, пересобрать снимок, забрать пользователей хаба |
+| `sync`                              | взять снимок control из DNS сейчас (таймер делает это каждые 5 минут)    |
+| `hub add\|del\|list`, `publish`, `import` | в `ROLE=control`: хабы, пересобрать и опубликовать снимок, забрать пользователей хаба |
 | `hub add\|token\|del\|list`         | хабы, которые пользуются этим exit'ом (`ROLE=exit`)                      |
 | `links [NAME]`                      | ссылки всех пользователей или одного                                     |
 | `rotate NAME\|--all [--grace H]`    | новые ключи, старые работают еще H часов (24)                            |
