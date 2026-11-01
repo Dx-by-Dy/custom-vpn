@@ -182,6 +182,11 @@ cmd_control_hub() {
       cmd_publish
       info "hub $name removed: it can't read new snapshots (it keeps the last one it applied)"
       ;;
+    token)
+      check_name "$name" "hub name"
+      control_hub_exists "$name" || die "no hub $name"
+      echo "[$name] on the hub:  ./vpn.sh control set '$(control_token "$name")'"
+      ;;
     list)
       if [[ -z $(conf_rows "$HUBS_FILE") ]]; then
         echo "No hubs yet. On a hub: ./vpn.sh control join, then here: ./vpn.sh hub add NAME TOKEN"
@@ -191,7 +196,7 @@ cmd_control_hub() {
       control_hubs_json | jq -r '.[] | "\(.name) \(.domain) vless:\(.vless_port) hy2:\(.hysteria_port) sub:\(.sub_port)"' |
         awk '{printf "%-16s %-30s %s %s %s\n", $1, $2, $3, $4, $5}'
       ;;
-    *) die "usage: ./vpn.sh hub add NAME TOKEN | del NAME | list" ;;
+    *) die "usage: ./vpn.sh hub add NAME TOKEN | token NAME | del NAME | list" ;;
   esac
 }
 

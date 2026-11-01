@@ -7,7 +7,7 @@ migrate_env() {
   local pair old new xver
   xver=$(sed -n 's/^REALITY_XVER=//p' "$ENV_FILE")
   [[ ${xver:-0} == 0 ]] ||
-    die "REALITY_XVER=$xver: sing-box can't send the PROXY protocol to REALITY_TARGET; set REALITY_SNI to another site, REALITY_TARGET= and REALITY_XVER=0 (see the README section on port 443)"
+    die "REALITY_XVER=$xver: sing-box can't send the PROXY protocol to REALITY_TARGET; set REALITY_SNI to another site, REALITY_TARGET= and REALITY_XVER=0 (see the 443/tcp section of docs/hub.md)"
   for pair in XRAY_PORT:VLESS_PORT XRAY_PRIVATE_KEY:REALITY_PRIVATE_KEY \
     XRAY_PUBLIC_KEY:REALITY_PUBLIC_KEY XRAY_SHORT_ID:REALITY_SHORT_ID; do
     old=${pair%:*} new=${pair#*:}

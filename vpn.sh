@@ -61,6 +61,7 @@ is published as a signed snapshot that hubs apply
   init                    create .env and the signing key (ROLE=control ./vpn.sh init)
   hub add NAME TOKEN      add (or update) a hub from the token `control join` printed on it,
                           print the token that hub needs
+  hub token NAME          print the token that hub needs again (e.g. after a new signing key)
   hub del NAME            remove a hub: it can't read new snapshots
   hub list                list hubs
   publish                 build the snapshot again (generated/state.txt) and put it
