@@ -14,9 +14,10 @@ DEFAULT_REPO_BRANCH=main
 CONF_FILES=(.env users.conf hubs.conf exits.conf groups.conf routing.conf)
 # Files and directories that hold this server's state; never taken from the repo
 STATE_PATHS=("${CONF_FILES[@]}" data generated)
-# What `check` asks for the public IP a route leaves from: a foreign site and a .ru one
-IP_ECHO_URL=https://api.ipify.org
-IP_ECHO_RU_URL=https://ip.beget.ru
+# What `check` asks for the public IP a route leaves from: foreign sites and .ru
+# ones, the first that answers counts (a page with the IP in it is fine)
+IP_ECHO_URLS="https://api.ipify.org https://icanhazip.com"
+IP_ECHO_RU_URLS="https://ip.mail.ru https://ip.nic.ru https://ip.beget.ru"
 # What vpn.sh changed on the host outside this directory, for `uninstall`
 HOST_STATE=/var/lib/custom-vpn
 SYSCTL_CONF=/etc/sysctl.d/99-vpn.conf
@@ -60,6 +61,8 @@ within minutes.
   ./vpn.sh control exit del NAME
   ./vpn.sh control exit list
   ./vpn.sh control route list               who leaves through which routes
+  ./vpn.sh control route ip [ROUTE]         the IP each route leaves from, on every hub
+                                            (their last check)
                                             (local, none = RU only, EXIT/IPNAME)
   ./vpn.sh control hub add NAME TOKEN       a hub from `./vpn.sh hub control join` there;
                                             prints the token for `hub control set`
@@ -90,8 +93,9 @@ Hub: people connect here.
   ./vpn.sh hub user add|del|list|route|group|links|rotate ...
   ./vpn.sh hub group add|route|del|list ...
   ./vpn.sh hub exit add|del|list ...
- Under control these only show: user list, user links, group list, exit list, route list
+ Under control these only show: user list, user links, group list, exit list, route list|ip
   ./vpn.sh hub route list                   who leaves through which route
+  ./vpn.sh hub route ip [ROUTE]             the IP each route leaves from, right now
 
 EOF
   show "exit" <<'EOF'

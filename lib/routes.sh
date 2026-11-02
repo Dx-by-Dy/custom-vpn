@@ -352,8 +352,33 @@ cmd_route() {
       if [[ $ROLE == control ]]; then where="always leaves from the hub the user is connected to"; else where="leaves from this hub for everyone"; fi
       echo "RU (.ru .su .рф, Russian services, Russian IPs) $where."
       ;;
-    *) die "usage: $(vsh route list)" ;;
+    ip)
+      if [[ -n ${2:-} ]]; then
+        [[ $2 != *,* ]] || die "one route at a time (or none for all)"
+        [[ $2 != none ]] || die "route none leaves nowhere (only RU, from the hub)"
+        check_route "$2"
+      fi
+      if [[ $ROLE == control ]]; then control_route_ip "${2:-}"; else hub_route_ip "${2:-}"; fi
+      ;;
+    *) die "usage: $(vsh route) list | ip [ROUTE]" ;;
   esac
+}
+
+# route ip on a hub: the IP each route (or ROUTE) leaves from now, and the one
+# it should
+hub_route_ip() {
+  local r want seen
+  printf '%-20s %-18s %s\n' ROUTE "LEAVES AS" "SHOULD BE"
+  while read -r r want; do
+    [[ -z $1 || $1 == "$r" ]] || continue
+    if [[ $r == local ]]; then
+      seen=$(via_ip check@local "$IP_ECHO_RU_URLS")
+      want="(this hub)"
+    else
+      seen=$(via_ip "check@$r" "$IP_ECHO_URLS")
+    fi
+    printf '%-20s %-18s %s\n' "$r" "${seen:-nowhere}" "$want"
+  done < <(echo "local -"; exit_routes_json | jq -r '.[] | "\(.name) \(.ip)"')
 }
 
 # --- check -------------------------------------------------------------------
@@ -364,7 +389,7 @@ check_exit_routes() {
   local only=${1:-} route ip seen
   declare -F report >/dev/null || report() { printf '%-12s %s\n' "$1" "$2"; }
   while read -r route ip; do
-    seen=$(via_check "check@$route" "$IP_ECHO_URL")
+    seen=$(via_ip "check@$route" "$IP_ECHO_URLS")
     if [[ $seen == "$ip" ]]; then
       report route "ok ($route: $ip)"
     else
@@ -376,19 +401,19 @@ check_exit_routes() {
 check_routes() {
   local seen local_ip entry tag file age missing
   # A Russian site: RU providers slow down some foreign ones (Cloudflare) from here
-  local_ip=$(via_check check@local "$IP_ECHO_RU_URL")
+  local_ip=$(via_ip check@local "$IP_ECHO_RU_URLS")
   if [[ -n $local_ip ]]; then report route "ok (local: $local_ip)"; else report route "FAIL: local doesn't work"; fi
   check_exit_routes
 
   # No route: nothing but RU, and RU leaves from the hub
-  seen=$(via_check check@none "$IP_ECHO_URL")
+  seen=$(via_ip check@none "$IP_ECHO_URLS")
   if [[ -z $seen ]]; then report fail-closed "ok (no route, no internet)"; else report fail-closed "FAIL: route none leaves as $seen"; fi
   # Route none and RU still leaves (from the hub)
-  seen=$(via_check check@none "$IP_ECHO_RU_URL")
+  seen=$(via_ip check@none "$IP_ECHO_RU_URLS")
   if [[ -n $seen && $seen == "$local_ip" ]]; then
     report ru "ok (leaves from the hub: $seen)"
   else
-    report ru "FAIL: $IP_ECHO_RU_URL with no route leaves $(leaves_as "$seen"), should be ${local_ip:-the hub}"
+    report ru "FAIL: RU sites ($IP_ECHO_RU_URLS) with no route: leave $(leaves_as "$seen"), should be ${local_ip:-the hub}"
   fi
 
   for entry in "${RULE_SETS[@]}"; do

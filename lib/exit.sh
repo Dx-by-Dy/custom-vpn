@@ -162,7 +162,7 @@ cmd_hub() {
 check_egress() {
   local name ip seen
   while read -r name ip; do
-    seen=$(via_check "check@$ip" "$IP_ECHO_URL")
+    seen=$(via_ip "check@$ip" "$IP_ECHO_URLS")
     if [[ $seen == "$ip" ]]; then
       report egress "ok ($name: $ip)"
     else

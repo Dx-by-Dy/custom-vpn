@@ -52,7 +52,7 @@ render_client() {
   mkdir -p "$OUT" data/caddy "$RULE_SETS_DIR"
   chmod 700 "$OUT"
   render_jq templates/client.jq "$OUT/sing-box.json" sing-box \
-    --slurpfile sub "$CLIENT_SUB_FILE" --arg test_url "$IP_ECHO_RU_URL"
+    --slurpfile sub "$CLIENT_SUB_FILE" --arg test_url "${IP_ECHO_RU_URLS%% *}"
   check sing-box -v "$PWD/$OUT/sing-box.json:/c.json:ro,z" "$SINGBOX_IMAGE" check -c /c.json
 }
 
@@ -85,8 +85,8 @@ check_client() {
   proxy=${proxy/#::/127.0.0.1}
   [[ $proxy == *:* ]] && proxy="[$proxy]"
   proxy=$proxy:$CLIENT_LISTEN_PORT
-  ru=$(curl -s -m 15 --noproxy '' -x "socks5h://$proxy" "$IP_ECHO_RU_URL" 2>/dev/null || true)
-  seen=$(curl -s -m 15 --noproxy '' -x "socks5h://$proxy" "$IP_ECHO_URL" 2>/dev/null || true)
+  ru=$(echo_ip "$IP_ECHO_RU_URLS" --noproxy '' -x "socks5h://$proxy")
+  seen=$(echo_ip "$IP_ECHO_URLS" --noproxy '' -x "socks5h://$proxy")
   if [[ -n $ru ]]; then
     report proxy "ok ($proxy: RU leaves as $ru, the rest $(leaves_as "$seen"))"
   else

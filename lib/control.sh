@@ -340,6 +340,49 @@ cmd_control_dns() {
   done
 }
 
+# A hub's status.json (nothing if it doesn't answer): DOMAIN PORT RECIPIENT
+hub_status_get() {
+  curl -fsS --noproxy '*' -m 15 "https://$1:$2/$(status_token "$3")/status.json" 2>/dev/null || true
+}
+
+# The routes of a status.json's check: "ROUTE ok|FAIL IP" (IP - : nowhere)
+status_routes() {
+  jq -r '.check.lines[]? | select(startswith("route ")) | sub("^route +"; "") |
+    if test("^ok \\(") then capture("^ok \\((?<r>[^:]+): (?<ip>[^)]+)\\)") + {s: "ok"}
+    else (capture("^FAIL: (?<r>[^ ,:]+)( leaves as (?<ip>[^ ,]+))?") // {r: "?"}) + {s: "FAIL"} end |
+    "\(.r) \(.s) \(.ip // "-")"' <<<"$1"
+}
+
+# route ip in control: the IP each route (or ROUTE) leaves from on every hub,
+# as the hub's last check saw it
+control_route_ip() {
+  local hubs name domain port recipient status at r s ip found rows=()
+  local -A should=([local]="(the hub)")
+  hubs=$(control_hubs_json)
+  [[ $(jq length <<<"$hubs") != 0 ]] || die "no hubs yet: $(vsh hub add) NAME TOKEN"
+  while read -r r ip; do should[$r]=$ip; done < <(exit_routes_json | jq -r '.[] | "\(.name) \(.ip)"')
+  while read -r name domain port recipient; do
+    status=$(hub_status_get "$domain" "$port" "$recipient")
+    if ! jq -e '.v == 1' <<<"$status" >/dev/null 2>&1; then
+      rows+=("${1:-*}"$'\t'"$name"$'\t?\t?\tno status (./vpn.sh control check)')
+      continue
+    fi
+    at=$(jq -r '.check.at // empty' <<<"$status")
+    [[ -n $at ]] && at="$(mins_since "$at") min ago" || at=never
+    found=false
+    while read -r r s ip; do
+      [[ -z $1 || $1 == "$r" ]] || continue
+      found=true
+      rows+=("$r"$'\t'"$name"$'\t'"${ip/#-/nowhere}"$'\t'"${should[$r]:-?}"$'\t'"$at")
+    done < <(status_routes "$status")
+    $found || rows+=("${1:-*}"$'\t'"$name"$'\t?\t'"${should[${1:-local}]:-?}"$'\tnot checked yet')
+  done < <(jq -r '.[] | "\(.name) \(.domain) \(.sub_port) \(.recipient)"' <<<"$hubs")
+  printf '%s\n' "${rows[@]}" | sort -s -t $'\t' -k1,1 | awk -F '\t' '
+    BEGIN { printf "%-20s %-10s %-18s %-18s %s\n", "ROUTE", "HUB", "LEAVES AS", "SHOULD BE", "CHECKED" }
+    { printf "%-20s %-10s %-18s %-18s %s\n", $1 == prev ? "" : $1, $2, $3, $4, $5; prev = $1 }'
+  echo "From each hub's last check (hourly); right now, on a hub: ./vpn.sh hub route ip [ROUTE]"
+}
+
 # minutes since an ISO time (UTC), or a big number
 mins_since() {
   local t
@@ -351,7 +394,7 @@ mins_since() {
 # and every route on every hub; non-zero exit when something is wrong
 cmd_control_check() {
   load_env
-  local failed=0 version d zone ns v bad hubs name domain port recipient st status ver ago problems sub token nhubs links
+  local failed=0 version d zone ns v bad hubs name domain port recipient status ver ago problems sub token nhubs links
   local -A routes_bad=() routes_ok=()
   report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
   version=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
@@ -396,8 +439,7 @@ cmd_control_check() {
   fi
   token=$(users_active | awk '{print $5; exit}')
   while read -r name domain port recipient; do
-    st=https://$domain:$port/$(status_token "$recipient")/status.json
-    status=$(curl -fsS --noproxy '*' -m 15 "$st" 2>/dev/null || true)
+    status=$(hub_status_get "$domain" "$port" "$recipient")
     if ! jq -e '.v == 1' <<<"$status" >/dev/null 2>&1; then
       report hub "FAIL: $name: no status at $domain:$port (down, blocked, or its code is older: ./vpn.sh hub update repo there)"
       continue
@@ -416,10 +458,9 @@ cmd_control_check() {
     ((ago <= 120)) || problems+=("no check for ${ago} min")
     while read -r line; do problems+=("$line"); done < <(jq -r '.check.lines[]? | select(test("^\\S+ +FAIL"))' <<<"$status")
     # routes as this hub sees them
-    while read -r r rest; do
-      if [[ $rest == ok* ]]; then routes_ok[$r]+="$name "; else routes_bad[$r]+="$name "; fi
-    done < <(jq -r '.check.lines[]? | select(startswith("route ")) | sub("^route +"; "") |
-      if test("^ok") then (capture("\\((?<r>[^:]+):").r + " ok") else (capture(": (?<r>[^ ]+) ").r // "?") + " " + . end' <<<"$status")
+    while read -r r s _; do
+      if [[ $s == ok ]]; then routes_ok[$r]+="$name "; else routes_bad[$r]+="$name "; fi
+    done < <(status_routes "$status")
     # the subscription of one user lists every hub
     if [[ -n $token ]]; then
       sub=$(curl -fsS --noproxy '*' -m 15 "https://$domain:$port/$token/sub" 2>/dev/null | base64 -d 2>/dev/null || true)

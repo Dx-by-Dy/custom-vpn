@@ -115,10 +115,20 @@ check_name() {
   [[ $1 =~ ^[a-z0-9_-]{1,32}$ ]] || die "${2:-name} must be 1-32 chars of a-z, 0-9, _ and -"
 }
 
-# Fetch URL through the local socks inbound of `check` as USER (check@...)
-via_check() {
-  curl -s -m 10 --socks5-hostname "127.0.0.1:$CHECK_PORT" --proxy-user "$1:$CHECK_TOKEN" "$2" 2>/dev/null || true
+# echo_ip URLS [CURL OPTION...]: the IP the first of URLS that answers sees
+# (the first IPv4 address of its page); nothing if none answers
+echo_ip() {
+  local urls=$1 u ip
+  shift
+  for u in $urls; do
+    ip=$(curl -s -m 10 "$@" "$u" 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1 || true)
+    [[ -z $ip ]] || { echo "$ip"; return; }
+  done
 }
+
+# via_ip USER URLS: the IP of echo_ip through the local socks inbound of `check`
+# as USER (check@ROUTE: that route)
+via_ip() { echo_ip "$2" --socks5-hostname "127.0.0.1:$CHECK_PORT" --proxy-user "$1:$CHECK_TOKEN"; }
 
 # "as IP" / "nowhere" for check messages
 leaves_as() { [[ -n $1 ]] && echo "as $1" || echo nowhere; }
