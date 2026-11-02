@@ -71,6 +71,8 @@ cmd_update_repo() {
   local new old tracked index changes
 
   need_pkg git "updates are fetched with it"
+  # A copy owned by another user (scp, rsync) is "dubious ownership" to git
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$PWD
   # Deployments copied without .git become a checkout on the first update
   [[ -d .git ]] || git init -q
   git fetch -q "$url" "$branch" || die "can't fetch $branch from $url"
