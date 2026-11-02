@@ -145,5 +145,5 @@ cmd_update_repo() {
 
   # Continue with the new vpn.sh: new .env keys, configs, restarts of what changed, timer
   exec 9>&-
-  exec ./vpn.sh deploy
+  if $ASSUME_YES; then exec ./vpn.sh -y deploy; else exec ./vpn.sh deploy; fi
 }
