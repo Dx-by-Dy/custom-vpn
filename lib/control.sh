@@ -2,7 +2,8 @@
 # ROLE=control (the scheme on a laptop) and hubs managed by it; sourced by vpn.sh
 
 # Control keeps users, groups, routes and exits like a hub does, plus the hubs
-# (hubs.conf: hub  token). Every change becomes a snapshot of all of it:
+# (hubs.conf: hub  token). Changes are only saved; `control publish` makes a
+# snapshot of all of it (`control diff`: what isn't published yet):
 #   JSON -> gzip -> age (one recipient per hub) -> signed with ssh-keygen -Y sign
 # written as one line "cvpn-state1.<signature>.<data>" (both base64). A hub
 # applies a snapshot only if control signed it, it can decrypt it and its
@@ -10,6 +11,8 @@
 CONTROL_DIR=data/control
 CONTROL_HUBS_HEADER='# hub  token'
 STATE_FILE=$OUT/state.txt
+# The scheme as last published, to tell what isn't (control diff)
+PUBLISHED_FILE=$CONTROL_DIR/published.json
 # ssh-keygen -Y namespace and principal of control's signatures
 SIG_NAMESPACE=cvpn-state
 SIG_PRINCIPAL=cvpn-control
@@ -95,9 +98,68 @@ control_token() {
 # conf file rows as a JSON list of lists
 conf_json() { conf_rows "$1" | jq -Rn '[inputs | [splits("[ \t]+")]]'; }
 
-# Build the snapshot into STATE_FILE (control's cmd_up)
+# The scheme as snapshots carry it, without version and time; hubs with their
+# recipients (who can read it)
+scheme_json() {
+  local hubs=${1:-$(control_hubs_json)}
+  jq -n --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
+    --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" --argjson hubs "$hubs" \
+    --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" '
+    {users: $users, groups: $groups, routing: $routing, exits: $exits, hubs: $hubs,
+     settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}'
+}
+
+# Is there something the hubs don't have yet?
+control_pending() {
+  [[ -s $PUBLISHED_FILE ]] || return 0
+  [[ $(scheme_json | jq -cS .) != "$(jq -cS . "$PUBLISHED_FILE")" ]]
+}
+
+# After a change in control (its cmd_up): saved, published only by `control publish`
+control_saved() {
+  if [[ $(control_hubs_json | jq length) == 0 ]]; then
+    info "saved (no hubs yet: ./vpn.sh control hub add NAME TOKEN)"
+  elif control_pending; then
+    info "saved, not published yet: ./vpn.sh control publish (what changes: ./vpn.sh control diff)"
+  else
+    info "saved; the hubs have this already"
+  fi
+}
+
+# control diff: what the next publish changes, without credentials
+cmd_control_diff() {
+  local cur
+  if [[ ! -s $PUBLISHED_FILE ]]; then
+    echo "Nothing recorded as published yet (published by an older version, or never): ./vpn.sh control publish"
+    return
+  fi
+  cur=$(scheme_json)
+  if [[ $(jq -cS . <<<"$cur") == "$(jq -cS . "$PUBLISHED_FILE")" ]]; then
+    echo "Nothing to publish: the hubs have v$(cat "$CONTROL_DIR/version" 2>/dev/null || echo ?)"
+    return
+  fi
+  echo "Not published yet (the hubs have v$(cat "$CONTROL_DIR/version" 2>/dev/null || echo ?)):"
+  jq -rn --slurpfile old "$PUBLISHED_FILE" --argjson new "$cur" '
+    $old[0] as $o |
+    # rows of a conf file by their first column (users have a row per credential)
+    def by($x): $x | group_by(.[0]) | map({key: .[0][0], value: .}) | from_entries;
+    def objs($x): $x | map({key: .name, value: .}) | from_entries;
+    def cmp($what; $a; $b; show):
+      ($b | keys[] | select($a[.] == null) as $k | "  \($what) + \($k)\($b[$k] | show)"),
+      ($a | keys[] | select($b[.] == null) | "  \($what) - \(.)"),
+      ($b | keys[] | select($a[.] != null and $a[.] != $b[.]) as $k | "  \($what) ~ \($k)\($b[$k] | show)");
+    cmp("user"; by($o.users); by($new.users); if length > 1 then " (\(length - 1) old key(s) in grace)" else "" end),
+    cmp("routes"; by($o.routing); by($new.routing); .[0] | ": group \(.[1]), routes \(.[2])"),
+    cmp("group"; by($o.groups); by($new.groups); .[0] | ": routes \(.[1])"),
+    cmp("exit"; by($o.exits); by($new.exits); ""),
+    cmp("hub"; objs($o.hubs); objs($new.hubs); " (\(.domain))"),
+    ($new.settings | keys[] | select($o.settings[.] != $new.settings[.]) as $k |
+      "  setting ~ \($k): \($o.settings[$k]) -> \($new.settings[$k])")'
+}
+
+# Build the snapshot into STATE_FILE and publish it (control publish)
 cmd_publish() {
-  local hubs version last tmp r recipients=() args=()
+  local hubs version last tmp r scheme recipients=() args=()
   hubs=$(control_hubs_json)
   if [[ $(jq length <<<"$hubs") == 0 ]]; then
     info "saved; no hubs yet, so nothing to publish (./vpn.sh control hub add NAME TOKEN)"
@@ -111,14 +173,9 @@ cmd_publish() {
 
   tmp_dir tmp
   for r in "${recipients[@]}"; do args+=(-r "$r"); done
-  jq -n --argjson version "$version" --arg created "$(date -u +%FT%TZ)" \
-    --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
-    --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" \
-    --argjson hubs "$(jq 'map(del(.recipient))' <<<"$hubs")" \
-    --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" '
-    {v: 1, version: $version, created: $created, users: $users, groups: $groups,
-     routing: $routing, exits: $exits, hubs: $hubs,
-     settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}' |
+  scheme=$(scheme_json "$hubs")
+  jq --argjson version "$version" --arg created "$(date -u +%FT%TZ)" '
+    {v: 1, version: $version, created: $created} + . | .hubs |= map(del(.recipient))' <<<"$scheme" |
     gzip -9 | age "${args[@]}" -o "$tmp/data"
   ssh-keygen -Y sign -q -f "$CONTROL_DIR/sign" -n "$SIG_NAMESPACE" "$tmp/data"
   mkdir -p "$OUT"
@@ -133,6 +190,9 @@ cmd_publish() {
   else
     echo "   on each hub: ssh HUB 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < $STATE_FILE"
   fi
+  printf '%s\n' "$scheme" >"$PUBLISHED_FILE.tmp"
+  chmod 600 "$PUBLISHED_FILE.tmp"
+  mv "$PUBLISHED_FILE.tmp" "$PUBLISHED_FILE"
 }
 
 # Subscription links of a user on every hub (control's `links`)
@@ -174,18 +234,19 @@ cmd_control_hub() {
         info "hub $name updated"
       fi
       echo "$name $token" >>"$HUBS_FILE"
-      cmd_publish
+      control_saved
       echo
-      echo "[$name] on the hub, once:  ./vpn.sh hub control set '$(control_token "$name")'"
-      dns_enabled || echo "  then apply the snapshot there (see above)"
+      echo "[$name] 1. here: ./vpn.sh control publish (so that the snapshot includes $name)"
+      echo "       2. on the hub, once:  ./vpn.sh hub control set '$(control_token "$name")'"
+      dns_enabled || echo "       3. apply the snapshot there (publish prints how)"
       echo
       ;;
     del)
       check_name "$name" "hub name"
       control_hub_exists "$name" || die "no hub $name"
       conf_rewrite "$HUBS_FILE" -v n="$name" '/^#/ || $1 != n'
-      cmd_publish
-      info "hub $name removed: it can't read new snapshots (it keeps the last one it applied)"
+      info "hub $name removed: it can't read snapshots published from now on (it keeps the last one it applied)"
+      control_saved
       ;;
     token)
       check_name "$name" "hub name"
@@ -241,7 +302,7 @@ cmd_import() {
     [[ -z $theirs || $theirs == "${!key:-none}" ]] ||
       warn "the hub had $key=$theirs, here it's ${!key:-none} (snapshots carry this one; change $ENV_FILE if needed)"
   done
-  cmd_publish
+  control_saved
 }
 
 # --- control: what the system looks like -------------------------------------
@@ -324,6 +385,11 @@ cmd_control_check() {
   hubs=$(control_hubs_json)
   nhubs=$(jq length <<<"$hubs")
   ((nhubs > 0)) || report hubs "FAIL: no hubs (./vpn.sh control hub add)"
+  if ((nhubs > 0)) && control_pending; then
+    report publish "FAIL: changes not published (./vpn.sh control diff, ./vpn.sh control publish)"
+  elif ((nhubs > 0)); then
+    report publish "ok (v$version has every change)"
+  fi
   token=$(users_active | awk '{print $5; exit}')
   while read -r name domain port recipient; do
     st=https://$domain:$port/$(status_token "$recipient")/status.json

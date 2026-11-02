@@ -154,12 +154,23 @@ run() {
   vpn "$dir/client" "$bin" client render >"$dir/client.log" 2>&1 || { cat "$dir/client.log"; fail "$name: client render"; }
   ctl=$(vpn "$dir/control" "$bin" control hub add hub2 "$HUB2_TOKEN" 2>&1) || { echo "$ctl"; fail "$name: control hub add"; }
   ctl=$(grep -o "cvpn-ctl:[^']*" <<<"$ctl")
+  # changes are only saved: diff shows them, publish sends them
+  vpn "$dir/control" "$bin" control diff >"$dir/diff.log" 2>&1 || { cat "$dir/diff.log"; fail "$name: control diff"; }
+  vpn "$dir/control" "$bin" control publish >"$dir/publish.log" 2>&1 || { cat "$dir/publish.log"; fail "$name: control publish"; }
+  vpn "$dir/control" "$bin" control group add qa local >/dev/null 2>&1 || fail "$name: control group add"
+  vpn "$dir/control" "$bin" control user route carol cz1/ip1,local >/dev/null 2>&1 || fail "$name: control user route"
+  vpn "$dir/control" "$bin" control diff >"$dir/diff.log" 2>&1 || { cat "$dir/diff.log"; fail "$name: control diff"; }
+  grep -q '^  group + qa: routes local$' "$dir/diff.log" && grep -q '^  routes ~ carol: group -, routes cz1/ip1,local$' "$dir/diff.log" ||
+    { cat "$dir/diff.log"; fail "$name: control diff doesn't show the changes"; }
+  vpn "$dir/control" "$bin" control group del qa >/dev/null 2>&1 || fail "$name: control group del"
+  vpn "$dir/control" "$bin" control user route carol none,cz1/ip1 >/dev/null 2>&1 || fail "$name: control user route back"
+  vpn "$dir/control" "$bin" control diff 2>&1 | grep -q '^Nothing to publish' || fail "$name: control diff after undoing"
   vpn "$dir/hub2" "$bin" hub control set "$ctl" >"$dir/hub2.log" 2>&1 || { cat "$dir/hub2.log"; fail "$name: hub2 control set"; }
   vpn "$dir/hub2" "$bin" hub control apply <"$dir/control/generated/state.txt" >>"$dir/hub2.log" 2>&1 ||
     { cat "$dir/hub2.log"; fail "$name: hub2 control apply"; }
   grep -q 'applied' "$dir/hub2.log" || { cat "$dir/hub2.log"; fail "$name: hub2 didn't apply the snapshot"; }
   (cd "$dir" && find hub/generated exit/generated client/generated hub2/generated hub2/users.conf hub2/exits.conf \
-    hub2/groups.conf hub2/routing.conf -type f ! -name '*.tmp' | sort | xargs sha256sum) >"$WORK/$name.sums"
+    hub2/groups.conf hub2/routing.conf -type f ! -name '*.tmp' ! -name status.json | sort | xargs sha256sum) >"$WORK/$name.sums"
 }
 
 # This host's jq, then each image as "jq" first in PATH

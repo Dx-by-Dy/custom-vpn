@@ -296,7 +296,7 @@ cmd_group() {
       check_route "$route" dash-ok
       conf_init "$GROUPS_FILE" "$GROUPS_HEADER"
       echo "$name $route" >>"$GROUPS_FILE"
-      [[ $ROLE != control ]] || cmd_publish
+      [[ $ROLE != control ]] || control_saved
       info "group $name added (route: ${route/#-/ROUTE_DEFAULT}); add users: $(vsh user group) USER $name"
       ;;
     route)
@@ -314,7 +314,7 @@ cmd_group() {
       members=$(conf_rows "$ROUTING_FILE" | awk -v g="$name" '$2 == g {printf "%s%s", (n++ ? " " : ""), $1}')
       [[ -z $members ]] || die "group $name has users: $members ($(vsh user group) USER - or another group)"
       conf_rewrite "$GROUPS_FILE" -v n="$name" '/^#/ || $1 != n'
-      [[ $ROLE != control ]] || cmd_publish
+      [[ $ROLE != control ]] || control_saved
       info "group $name removed"
       ;;
     list)

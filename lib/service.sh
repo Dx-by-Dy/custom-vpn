@@ -195,10 +195,10 @@ preflight() {
 
 cmd_up() {
   local running restart=() svc
-  # control: a change means a new snapshot
+  # control: a change is saved; `control publish` sends it to the hubs
   if [[ $(env_role) == control ]]; then
     load_env
-    cmd_publish
+    control_saved
     return
   fi
   running=$("$DOCKER" compose ps --services --status running 2>/dev/null || true)

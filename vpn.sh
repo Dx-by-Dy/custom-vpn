@@ -36,8 +36,9 @@ Usage: ./vpn.sh ROLE OBJECT ACTION [args]
 
 EOF
   show "control" <<'EOF'
-Control (the laptop): the scheme of every hub. Each change is published as a
-signed snapshot (DNS, CONTROL_DOMAIN in .env); hubs apply it within minutes.
+Control (the laptop): the scheme of every hub. Changes are saved here; publish
+sends them as a signed snapshot (DNS, CONTROL_DOMAIN in .env), hubs apply it
+within minutes.
   ./vpn.sh control init                     .env and the signing key
   ./vpn.sh control user add NAME [--group G] [--route R]
   ./vpn.sh control user del NAME            the user's keys stop working on every hub
@@ -68,9 +69,10 @@ signed snapshot (DNS, CONTROL_DOMAIN in .env); hubs apply it within minutes.
   ./vpn.sh control check                    the whole system: DNS, every hub (snapshot, DNS,
                                             its own check, subscription), every route
   ./vpn.sh control dns                      the control domains: zones, what DNS gives
-  ./vpn.sh control publish                  build and publish the snapshot again
+  ./vpn.sh control diff                     what isn't published yet
+  ./vpn.sh control publish                  send the scheme to the hubs (a new snapshot)
   ./vpn.sh control import FILE              users of a stand-alone hub (`hub control export`)
-  ./vpn.sh control prune                    drop expired credentials, publish
+  ./vpn.sh control prune                    drop expired credentials
 
 EOF
   show "hub" <<'EOF'
@@ -190,7 +192,7 @@ esac
 case $(env_role) in
   control)
     case $cmd in
-      init | user | links | rotate | prune | exit | group | route | hub | publish | import | up | check | dns | help | -h | --help) ;;
+      init | user | links | rotate | prune | exit | group | route | hub | publish | diff | import | up | check | dns | help | -h | --help) ;;
       *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
     esac
     ;;
@@ -220,6 +222,7 @@ case $cmd in
   state) cmd_state "$@" ;;
   sync) cmd_sync ;;
   dns) require_role control dns; cmd_control_dns ;;
+  diff) require_role control diff; cmd_control_diff ;;
   publish) require_role control publish; cmd_publish ;;
   import) cmd_import "$@" ;;
   links) cmd_links "$@" ;;
