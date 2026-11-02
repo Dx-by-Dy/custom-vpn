@@ -115,7 +115,11 @@ control_pending() {
   [[ $(scheme_json | jq -cS .) != "$(jq -cS . "$PUBLISHED_FILE")" ]]
 }
 
-# After a change in control (its cmd_up): saved, published only by `control publish`
+# A change in control (its cmd_up): vpn.sh says at the end that it's saved
+CONTROL_CHANGED=false
+control_changed() { CONTROL_CHANGED=true; }
+
+# Saved, published only by `control publish`
 control_saved() {
   if [[ $(control_hubs_json | jq length) == 0 ]]; then
     info "saved (no hubs yet: ./vpn.sh control hub add NAME TOKEN)"
@@ -234,7 +238,7 @@ cmd_control_hub() {
         info "hub $name updated"
       fi
       echo "$name $token" >>"$HUBS_FILE"
-      control_saved
+      control_changed
       echo
       echo "[$name] 1. here: ./vpn.sh control publish (so that the snapshot includes $name)"
       echo "       2. on the hub, once:  ./vpn.sh hub control set '$(control_token "$name")'"
@@ -246,7 +250,7 @@ cmd_control_hub() {
       control_hub_exists "$name" || die "no hub $name"
       conf_rewrite "$HUBS_FILE" -v n="$name" '/^#/ || $1 != n'
       info "hub $name removed: it can't read snapshots published from now on (it keeps the last one it applied)"
-      control_saved
+      control_changed
       ;;
     token)
       check_name "$name" "hub name"
@@ -302,7 +306,7 @@ cmd_import() {
     [[ -z $theirs || $theirs == "${!key:-none}" ]] ||
       warn "the hub had $key=$theirs, here it's ${!key:-none} (snapshots carry this one; change $ENV_FILE if needed)"
   done
-  control_saved
+  control_changed
 }
 
 # --- control: what the system looks like -------------------------------------

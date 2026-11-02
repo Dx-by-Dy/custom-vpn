@@ -160,8 +160,11 @@ run() {
   vpn "$dir/control" "$bin" control group add qa local >/dev/null 2>&1 || fail "$name: control group add"
   vpn "$dir/control" "$bin" control user route carol cz1/ip1,local >/dev/null 2>&1 || fail "$name: control user route"
   vpn "$dir/control" "$bin" control diff >"$dir/diff.log" 2>&1 || { cat "$dir/diff.log"; fail "$name: control diff"; }
-  grep -q '^  group + qa: routes local$' "$dir/diff.log" && grep -q '^  routes ~ carol: group -, routes cz1/ip1,local$' "$dir/diff.log" ||
-    { cat "$dir/diff.log"; fail "$name: control diff doesn't show the changes"; }
+  if ! grep -q '^  group + qa: routes local$' "$dir/diff.log" ||
+    ! grep -q '^  routes ~ carol: group -, routes cz1/ip1,local$' "$dir/diff.log"; then
+    cat "$dir/diff.log"
+    fail "$name: control diff doesn't show the changes"
+  fi
   vpn "$dir/control" "$bin" control group del qa >/dev/null 2>&1 || fail "$name: control group del"
   vpn "$dir/control" "$bin" control user route carol none,cz1/ip1 >/dev/null 2>&1 || fail "$name: control user route back"
   vpn "$dir/control" "$bin" control diff 2>&1 | grep -q '^Nothing to publish' || fail "$name: control diff after undoing"

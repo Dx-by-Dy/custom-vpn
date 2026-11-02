@@ -235,3 +235,5 @@ case $cmd in
   help | -h | --help) usage ;;
   *) echo "unknown command: $cmd" >&2; usage >&2; exit 1 ;;
 esac
+# control: say once, at the end, that the change is only saved
+! $CONTROL_CHANGED || control_saved
