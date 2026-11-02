@@ -103,7 +103,10 @@ IP exit'а становятся маршрутами `cz1/ip1`, `cz1/ip2` (им�
 ./vpn.sh control user add ivan --group sales       # или --route cz1/ip2, или без маршрута (ROUTE_DEFAULT)
 ./vpn.sh control user links ivan                        # ссылки ivan на каждом хабе
 ./vpn.sh control route list                        # кто через какой маршрут выходит и почему
+./vpn.sh control route ip il1/ip1                  # с какого IP он выходит на каждом хабе
 ```
+
+`route ip [ROUTE]` показывает IP, который каждый хаб видел у маршрута при последнем `check` (хабы проверяют раз в час; столбец CHECKED — сколько минут назад), рядом с тем IP, каким он должен быть. Без маршрута — все. Прямо сейчас, а не по последней проверке — `./vpn.sh hub route ip [ROUTE]` на хабе.
 
 Ссылку любого хаба можно отдавать человеку: подписка каждого хаба содержит все хабы (этот первым), и если один хаб недоступен, приложение переключается на другой. Импорт — страница `https://<хаб>:8443/<token>/` с кнопками для Hiddify, NekoBox, V2Box, или ссылка `…/sub` в любое приложение.
 
@@ -177,7 +180,7 @@ Not published yet (the hubs have v1793577880):
 | exit сломался | `check` на хабах падает на его маршрутах, трафик этих людей никуда не уходит (переключения на другой IP нет). Временно: `group route` / `user route` на другой маршрут |
 | новый хаб | `hub deploy` и `hub control join` на нем, здесь `hub add`, на нем `hub control set` |
 | хаб заблокирован / выведен | `hub del NAME`: он не прочитает следующие снимки, из подписок остальных хабов он пропадет при следующем обновлении |
-| посмотреть схему | `user list`, `group list`, `exit list`, `hub list`, `route list` |
+| посмотреть схему | `user list`, `group list`, `exit list`, `hub list`, `route list`, `route ip` |
 
 ## Домен управления
 
@@ -249,6 +252,7 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 | `group add NAME [R[,R...]]` / `route NAME R[,R...]\|-` / `del` / `list` | группы |
 | `exit add NAME TOKEN` / `del` / `list` | exit'ы и их маршруты `NAME/IP` |
 | `route list` | кто через что выходит |
+| `route ip [ROUTE]` | с какого IP выходит маршрут на каждом хабе (по их последнему `check`) |
 | `hub add NAME TOKEN` / `token NAME` / `del NAME` / `list` | хабы |
 | `user links [NAME]` | ссылки пользователя на каждом хабе |
 | `user rotate NAME\|--all [--grace H]` | новые ключи, старые работают еще H часов |
@@ -257,4 +261,4 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 | `dns` | домены управления, их зоны и версии в DNS |
 | `diff` | что изменится на хабах при следующем `publish` (без ключей) |
 | `publish` | отправить схему на хабы: новый снимок (без изменений — новая версия того же) |
-| `prune` | удалить из схемы ключи с истекшей отсрочкой ротации и опубликовать |
+| `prune` | удалить из схемы ключи с истекшей отсрочкой ротации (на хабы — `publish`) |

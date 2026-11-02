@@ -59,6 +59,7 @@ RU (имена `.ru .su .рф`, список `geosite-category-ru`, россий
 ./vpn.sh hub user add ivan --group sales    # или --route cz1/ip2
 ./vpn.sh hub user route ivan cz1/ip2        # свой маршрут сильнее группы; - — снова маршрут группы
 ./vpn.sh hub route list
+./vpn.sh hub route ip cz1/ip1               # с какого IP маршрут выходит прямо сейчас (без маршрута — все)
 ```
 
 - Списки RU — от SagerNet в `data/rule-sets/`, таймер обновляет их раз в сутки (`./vpn.sh hub update rules` — сразу); если GitHub с хаба недоступен, они скачиваются через exit.
@@ -84,7 +85,7 @@ RU (имена `.ru .su .рф`, список `geosite-category-ru`, россий
 
 ## Под control
 
-- Пользователи, группы, маршруты, exit'ы, `ROUTE_DEFAULT` и `SUB_NAME` приходят снимками; команды, которые их меняют, здесь отказывают (`user list`, `route list`, `user links` работают).
+- Пользователи, группы, маршруты, exit'ы, `ROUTE_DEFAULT` и `SUB_NAME` приходят снимками; команды, которые их меняют, здесь отказывают (`user list`, `route list`, `route ip`, `user links` работают).
 - `vpn-sync.timer` раз в 5 минут читает `head.<CONTROL_DOMAIN>` через резолверы `CONTROL_RESOLVERS` (по умолчанию `system 77.88.8.8 1.1.1.1 8.8.8.8`); `./vpn.sh hub control sync` — сразу. Список доменов управления приходит в снимке, менять его здесь не нужно.
 - Снимок вручную, если DNS недоступен: `./vpn.sh hub control apply < state.txt` (с ноутбука: `ssh root@хаб 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < generated/state.txt`).
 - `./vpn.sh hub control unset` — снова управлять пользователями здесь (остаются пользователи последнего снимка), таймер снимается.

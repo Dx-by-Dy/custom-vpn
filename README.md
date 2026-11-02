@@ -99,12 +99,12 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                   group  add NAME [ROUTE] | route NAME ROUTE|- | del NAME | list
                   exit   add NAME TOKEN | del NAME | list
                   hub    add NAME TOKEN | token NAME | del NAME | list
-                  route  list
+                  route  list | ip [ROUTE]
                   diff | publish | check | dns | import FILE | prune
 
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
-                  user …, group …, exit …, route list      (как в control; под control — только просмотр)
+                  user …, group …, exit …, route list|ip   (как в control; под control — только просмотр)
                   update repo|images|rules | firewall [--dry-run] | tune | install-docker | uninstall
 
 ./vpn.sh exit     deploy | init | up | down | logs | check | prune | render

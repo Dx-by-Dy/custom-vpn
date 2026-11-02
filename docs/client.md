@@ -21,7 +21,7 @@ CLIENT_SUB='https://hub1.example.ru:8443/<token>/sub https://hub2.example.ru:844
 
 ```sh
 curl -x socks5h://127.0.0.1:2080 https://api.ipify.org          # IP маршрута пользователя
-curl -x socks5h://127.0.0.1:2080 https://ip.beget.ru            # IP хаба (RU)
+curl -x socks5h://127.0.0.1:2080 https://ip.mail.ru | grep -oE '([0-9]+\.){3}[0-9]+' | head -1   # IP хаба (RU)
 export HTTPS_PROXY=http://127.0.0.1:2080 HTTP_PROXY=http://127.0.0.1:2080   # для программ, которые понимают прокси
 ```
 
