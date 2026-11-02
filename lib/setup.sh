@@ -145,7 +145,7 @@ EOF
   systemctl daemon-reload
   systemctl enable -q --now vpn-maintenance.timer
   info "vpn-maintenance.timer enabled (failures show in: systemctl --failed)"
-  if managed && [[ -n ${CONTROL_DOMAIN:-} ]]; then install_sync_timer; fi
+  if under_control && [[ -n ${CONTROL_DOMAIN:-} ]]; then install_sync_timer; fi
 }
 
 cmd_install_docker() {

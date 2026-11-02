@@ -256,6 +256,8 @@ cmd_check() {
 
   [[ $ROLE == exit ]] || check_hub_cert
   [[ $ROLE == exit ]] || check_control
+  if [[ $ROLE == exit ]] && under_control; then check_sync; fi
+  check_update
   if reality_target_ok; then
     report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
   else

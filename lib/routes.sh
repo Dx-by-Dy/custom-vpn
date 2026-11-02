@@ -249,6 +249,7 @@ cmd_exit() {
       else
         echo "$name $token" >>"$EXITS_FILE"
         info "exit $name added"
+        [[ $ROLE != control ]] || echo "   for code updates from here: $(vsh exit token) $name (a command for the exit, once)"
       fi
       cmd_up
       # The hub can reach the exit, and each route leaves from its IP
@@ -280,7 +281,23 @@ cmd_exit() {
           awk '{printf "%-16s %-28s", $1, $2; for (i = 3; i <= NF; i++) printf " %s", $i; print ""}'
       done < <(conf_rows "$EXITS_FILE")
       ;;
-    *) die "usage: $(vsh exit) add NAME TOKEN | del NAME | list" ;;
+    update)
+      [[ $ROLE == control ]] || die "code updates are ordered from control: ./vpn.sh control exit update"
+      control_update exit "$name" "$token"
+      ;;
+    token)
+      [[ $ROLE == control ]] || die "./vpn.sh control exit token NAME, in control"
+      exit_exists "$name" || die "no exit $name"
+      [[ -n $(control_domains) ]] || die "no CONTROL_DOMAIN: exits get control's orders only through DNS"
+      echo "[$name] on the exit, once (the token holds control's update key, keep it private):"
+      echo "  ./vpn.sh exit control set '$(control_exit_token "$name")'"
+      ;;
+    *)
+      if [[ $ROLE == control ]]; then
+        die "usage: $(vsh exit) add NAME TOKEN | del NAME | list | update [NAME|--all [COMMIT|-]] | token NAME"
+      fi
+      die "usage: $(vsh exit) add NAME TOKEN | del NAME | list"
+      ;;
   esac
 }
 

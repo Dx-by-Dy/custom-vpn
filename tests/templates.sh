@@ -172,6 +172,9 @@ run() {
   vpn "$dir/hub2" "$bin" hub control apply <"$dir/control/generated/state.txt" >>"$dir/hub2.log" 2>&1 ||
     { cat "$dir/hub2.log"; fail "$name: hub2 control apply"; }
   grep -q 'applied' "$dir/hub2.log" || { cat "$dir/hub2.log"; fail "$name: hub2 didn't apply the snapshot"; }
+  # control's update key comes with the snapshot (code update orders, lib/remote.sh)
+  [[ $(grep '^AGE-SECRET' "$dir/control/data/control/update.key") == "$(cat "$dir/hub2/data/control/update.key" 2>/dev/null)" ]] ||
+    fail "$name: hub2 didn't get control's update key"
   (cd "$dir" && find hub/generated exit/generated client/generated hub2/generated hub2/users.conf hub2/exits.conf \
     hub2/groups.conf hub2/routing.conf -type f ! -name '*.tmp' ! -name status.json | sort | xargs sha256sum) >"$WORK/$name.sums"
 }

@@ -12,7 +12,7 @@ latest_release() {
 cmd_update() {
   case ${1:-} in
     images) cmd_update_images ;;
-    repo) cmd_update_repo ;;
+    repo) cmd_update_repo "${2:-}" ;;
     rules)
       require_role hub "update rules"
       rule_sets_refresh 0
@@ -65,7 +65,10 @@ cmd_update_images() {
   info "updated"
 }
 
+# update repo [COMMIT]: the branch's last commit, or COMMIT of it (or one this
+# checkout ran before: going back after a bad update)
 cmd_update_repo() {
+  local want=${1:-}
   load_env
   local url=${REPO_URL:-$DEFAULT_REPO_URL} branch=${REPO_BRANCH:-$DEFAULT_REPO_BRANCH}
   local new old tracked index changes
@@ -78,6 +81,13 @@ cmd_update_repo() {
   git fetch -q "$url" "$branch" || die "can't fetch $branch from $url"
   new=$(git rev-parse FETCH_HEAD)
   old=$(git rev-parse -q --verify HEAD || true)
+  if [[ -n $want ]]; then
+    git cat-file -e "$want^{commit}" 2>/dev/null || die "no commit $want in $url ($branch)"
+    git merge-base --is-ancestor "$want" FETCH_HEAD 2>/dev/null ||
+      { [[ -n $old ]] && git merge-base --is-ancestor "$want" "$old" 2>/dev/null; } ||
+      die "$want isn't on $branch of $url"
+    new=$(git rev-parse "$want^{commit}")
+  fi
 
   # A reset to a commit that tracks local state would overwrite it
   tracked=$(git ls-tree -r --name-only "$new" -- "${STATE_PATHS[@]}")

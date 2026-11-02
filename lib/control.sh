@@ -104,9 +104,11 @@ scheme_json() {
   local hubs=${1:-$(control_hubs_json)}
   jq -n --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
     --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" --argjson hubs "$hubs" \
-    --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" '
+    --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" \
+    --argjson updates "$(conf_json "$UPDATES_FILE")" '
     {users: $users, groups: $groups, routing: $routing, exits: $exits, hubs: $hubs,
-     settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}'
+     settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}
+    + (if $updates != [] then {updates: $updates} else {} end)'
 }
 
 # Is there something the hubs don't have yet?
@@ -148,6 +150,7 @@ cmd_control_diff() {
     # rows of a conf file by their first column (users have a row per credential)
     def by($x): $x | group_by(.[0]) | map({key: .[0][0], value: .}) | from_entries;
     def objs($x): $x | map({key: .name, value: .}) | from_entries;
+    def orders($x): $x // [] | map({key: "\(.[0]) \(.[1])", value: .}) | from_entries;
     def cmp($what; $a; $b; show):
       ($b | keys[] | select($a[.] == null) as $k | "  \($what) + \($k)\($b[$k] | show)"),
       ($a | keys[] | select($b[.] == null) | "  \($what) - \(.)"),
@@ -157,6 +160,7 @@ cmd_control_diff() {
     cmp("group"; by($o.groups); by($new.groups); .[0] | ": routes \(.[1])"),
     cmp("exit"; by($o.exits); by($new.exits); ""),
     cmp("hub"; objs($o.hubs); objs($new.hubs); " (\(.domain))"),
+    cmp("update"; orders($o.updates); orders($new.updates); ": to \(.[2][:12])"),
     ($new.settings | keys[] | select($o.settings[.] != $new.settings[.]) as $k |
       "  setting ~ \($k): \($o.settings[$k]) -> \($new.settings[$k])")'
 }
@@ -178,8 +182,9 @@ cmd_publish() {
   tmp_dir tmp
   for r in "${recipients[@]}"; do args+=(-r "$r"); done
   scheme=$(scheme_json "$hubs")
-  jq --argjson version "$version" --arg created "$(date -u +%FT%TZ)" '
-    {v: 1, version: $version, created: $created} + . | .hubs |= map(del(.recipient))' <<<"$scheme" |
+  jq --argjson version "$version" --arg created "$(date -u +%FT%TZ)" --arg update_key "$(control_update_key)" '
+    {v: 1, version: $version, created: $created} + . + {update_key: $update_key}
+    | .hubs |= map(del(.recipient)) | del(.updates)' <<<"$scheme" |
     gzip -9 | age "${args[@]}" -o "$tmp/data"
   ssh-keygen -Y sign -q -f "$CONTROL_DIR/sign" -n "$SIG_NAMESPACE" "$tmp/data"
   mkdir -p "$OUT"
@@ -188,6 +193,7 @@ cmd_publish() {
   chmod 600 "$STATE_FILE.tmp"
   mv "$STATE_FILE.tmp" "$STATE_FILE"
   echo "$version" >"$CONTROL_DIR/version"
+  update_build "$version" "$hubs"
   info "snapshot v$version for $(jq -r 'map(.name) | join(", ")' <<<"$hubs"): $STATE_FILE ($(wc -c <"$STATE_FILE") bytes)"
   if dns_enabled; then
     dns_publish "$version"
@@ -266,7 +272,8 @@ cmd_control_hub() {
       control_hubs_json | jq -r '.[] | "\(.name) \(.domain) vless:\(.vless_port) hy2:\(.hysteria_port) sub:\(.sub_port)"' |
         awk '{printf "%-16s %-30s %s %s %s\n", $1, $2, $3, $4, $5}'
       ;;
-    *) die "usage: ./vpn.sh control hub add NAME TOKEN | token NAME | del NAME | list" ;;
+    update) control_update hub "$name" "$token" ;;
+    *) die "usage: ./vpn.sh control hub add NAME TOKEN | token NAME | del NAME | list | update [NAME|--all [COMMIT|-]]" ;;
   esac
 }
 
@@ -394,7 +401,7 @@ mins_since() {
 # and every route on every hub; non-zero exit when something is wrong
 cmd_control_check() {
   load_env
-  local failed=0 version d zone ns v bad hubs name domain port recipient status ver ago problems sub token nhubs links
+  local failed=0 version d zone ns v bad hubs name domain port recipient status code ordered at ver ago problems sub token nhubs links
   local -A routes_bad=() routes_ok=()
   report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
   version=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
@@ -461,6 +468,13 @@ cmd_control_check() {
     while read -r r s _; do
       if [[ $s == ok ]]; then routes_ok[$r]+="$name "; else routes_bad[$r]+="$name "; fi
     done < <(status_routes "$status")
+    # the code control ordered (update FAIL lines came above); 15 min to get there
+    code=$(jq -r '.update.code // empty' <<<"$status")
+    read -r ordered at < <(conf_rows "$UPDATES_FILE" | awk -v n="$name" '$1 == "hub" && $2 == n {print $3, $4}') || true
+    if [[ -n ${ordered:-} && $code != "$ordered" ]] && (($(date +%s) - at > 900)) &&
+      ! jq -e '.update.result // "" | startswith("FAIL")' <<<"$status" >/dev/null; then
+      problems+=("ordered ${ordered:0:12}, runs ${code:-an older version}")
+    fi
     # the subscription of one user lists every hub
     if [[ -n $token ]]; then
       sub=$(curl -fsS --noproxy '*' -m 15 "https://$domain:$port/$token/sub" 2>/dev/null | base64 -d 2>/dev/null || true)
@@ -470,7 +484,7 @@ cmd_control_check() {
     if ((${#problems[@]})); then
       report hub "FAIL: $name: $(printf '%s; ' "${problems[@]}" | sed 's/; $//')"
     else
-      report hub "ok ($name: v$ver, check $(mins_since "$(jq -r '.check.at' <<<"$status")") min ago: $(jq '.check.lines | length' <<<"$status") ok)"
+      report hub "ok ($name: v$ver${code:+, code ${code:0:7}}, check $(mins_since "$(jq -r '.check.at' <<<"$status")") min ago: $(jq '.check.lines | length' <<<"$status") ok)"
     fi
   done < <(jq -r '.[] | "\(.name) \(.domain) \(.sub_port) \(.recipient)"' <<<"$hubs")
 
@@ -491,7 +505,11 @@ cmd_control_check() {
 
 cmd_control() {
   local action=${1:-} token=${2:-} json
-  require_role hub control
+  require_role "hub exit" control
+  if [[ $ROLE == exit ]]; then
+    cmd_exit_control "$@"
+    return
+  fi
   case $action in
     join)
       # This hub's key for snapshots, and what control needs to know about it
@@ -592,6 +610,10 @@ state_apply() {
   conf_from_json "$EXITS_FILE" "$EXITS_HEADER" "$(jq -c .exits <<<"$json")"
   set_var ROUTE_DEFAULT "$(jq -r .settings.ROUTE_DEFAULT <<<"$json")"
   set_var SUB_NAME "$(jq -r .settings.SUB_NAME <<<"$json")"
+  # The key of control's update orders (lib/remote.sh)
+  if [[ -n $(jq -r '.update_key // empty' <<<"$json") ]]; then
+    (umask 077 && jq -r .update_key <<<"$json" >"$UPDATE_KEY")
+  fi
   apply_control_domains "$(jq -r '.settings.CONTROL_DOMAIN // empty' <<<"$json")"
   # Everything control said, for what comes later (other hubs in the subscription)
   printf '%s\n' "$json" >"$CONTROL_DIR/state.json"

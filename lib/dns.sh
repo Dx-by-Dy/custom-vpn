@@ -110,8 +110,9 @@ dns_wait() {
   done
 }
 
-# Put STATE_FILE (snapshot VERSION) under every domain of CONTROL_DOMAIN; part
-# of control's publish. Fails only if no domain took it
+# Put STATE_FILE (snapshot VERSION) and UPDATE_FILE (control's update orders,
+# lib/remote.sh) under every domain of CONTROL_DOMAIN; part of control's
+# publish. Fails only if no domain took them
 dns_publish() {
   local version=$1 ok=0 failed=()
   dns_settings
@@ -133,29 +134,40 @@ dns_publish() {
 }
 
 dns_publish_domain() {
-  local version=$1 line pieces n i head records old_head now keys
-  line=$(<"$STATE_FILE")
+  local version=$1 records n
+  records=$(dns_records)
+  n=$(dns_publish_line "$version" head v "$(<"$STATE_FILE")" "$records")
+  dns_publish_line "$version" upd u "$(<"$UPDATE_FILE")" "$records" >/dev/null
+  info "in DNS: head.$DNS_DOMAIN -> v$version ($n TXT records, upd.$DNS_DOMAIN too); hubs take it within ${SYNC_EVERY%min} min + TTL ${DNS_TTL}s"
+}
+
+# dns_publish_line VERSION HEAD PREFIX LINE RECORDS: LINE in pieces
+# PREFIX<VERSION>-<i>, then HEAD ("cvpn1 v=VERSION n=PIECES sha256=...") points
+# to them, and pieces of old versions go; prints the number of pieces
+dns_publish_line() {
+  local version=$1 label=$2 prefix=$3 line=$4 records=$5 pieces=() n i head old_head now keys
   n=$(((${#line} + DNS_PIECE - 1) / DNS_PIECE))
   head="cvpn1 v=$version n=$n sha256=$(sha256 "$line")"
-  records=$(dns_records)
-  pieces=()
   for ((i = 0; i < n; i++)); do
-    dns_put "v$version-$i" "${line:i*DNS_PIECE:DNS_PIECE}"
-    pieces+=("v$version-$i" "${line:i*DNS_PIECE:DNS_PIECE}")
+    dns_put "$prefix$version-$i" "${line:i*DNS_PIECE:DNS_PIECE}"
+    pieces+=("$prefix$version-$i" "${line:i*DNS_PIECE:DNS_PIECE}")
   done
   dns_wait "${pieces[@]}" ||
-    die "the name servers of $DNS_ZONE don't show v$version yet; head is unchanged, run ./vpn.sh control publish again"
+    die "the name servers of $DNS_ZONE don't show $prefix$version yet; $label is unchanged, run ./vpn.sh control publish again"
 
-  old_head=$(awk -F'\t' '$1 == "head" {print $3; exit}' <<<"$records")
-  dns_put head "$head" "$old_head"
-  dns_wait head "$head" || warn "the name servers of $DNS_ZONE don't show the new head yet"
+  old_head=$(awk -F'\t' -v h="$label" '$1 == h {print $3; exit}' <<<"$records")
+  dns_put "$label" "$head" "$old_head"
+  dns_wait "$label" "$head" || warn "the name servers of $DNS_ZONE don't show the new $label yet"
 
   # Old versions: once their successor is older than 2 TTL, no cached head
   # points to them. Versions above this one aren't control's (they only grow)
   now=$(date +%s)
-  keys=$(awk -F'\t' -v cur="$version" -v now="$now" -v ttl="$DNS_TTL" '
-    $1 == "head" && seen_head++ {print $3}
-    match($1, /^v[0-9]+-/) {v = substr($1, 2, RLENGTH - 2) + 0; if (v != cur) {key[v] = key[v] $3 "\n"; vs[v]}}
+  keys=$(awk -F'\t' -v cur="$version" -v now="$now" -v ttl="$DNS_TTL" -v h="$label" -v p="$prefix" '
+    $1 == h && seen_head++ {print $3}
+    index($1, p) == 1 && substr($1, length(p) + 1) ~ /^[0-9]+-[0-9]+$/ {
+      v = substr($1, length(p) + 1); sub(/-.*/, "", v); v += 0
+      if (v != cur) {key[v] = key[v] $3 "\n"; vs[v]}
+    }
     END {
       for (v in vs) {
         next_v = cur
@@ -164,39 +176,60 @@ dns_publish_domain() {
       }
     }' <<<"$records")
   dns_delete <<<"$keys"
-  info "in DNS: head.$DNS_DOMAIN -> v$version ($n TXT records); hubs take it within ${SYNC_EVERY%min} min + TTL ${DNS_TTL}s"
+  echo "$n"
 }
 
 # --- hub: reading them -------------------------------------------------------
 
+# dns_head DOMAIN RESOLVER LABEL: "VERSION PIECES SHA256" of LABEL.DOMAIN
+dns_head() {
+  local h
+  h=$(dns_txt "$3.$1" "$2")
+  [[ $h =~ ^cvpn1\ v=([0-9]+)\ n=([0-9]+)\ sha256=([0-9a-f]{64})$ ]] || return 1
+  echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
+}
+
+# dns_line DOMAIN RESOLVER PREFIX VERSION PIECES SHA256: the line those pieces
+# make, if they are all there and match the head
+dns_line() {
+  local i piece line=
+  (($5 > 0 && $5 <= 500)) || return 1
+  for ((i = 0; i < $5; i++)); do
+    piece=$(dns_txt "$3$4-$i.$1" "$2")
+    [[ -n $piece ]] || return 1
+    line+=$piece
+  done
+  [[ $(sha256 "$line") == "$6" ]] || return 1
+  printf '%s\n' "$line"
+}
+
+# sync: a hub applies control's newest snapshot; hubs and exits under control
+# carry out their update order (lib/remote.sh)
 cmd_sync() {
-  local applied head v n sha line i piece d r answered=false newest=0
-  require_role hub sync
-  managed || die "this hub isn't managed by control"
+  local applied v n sha line d r answered=false newest=0
+  require_role "hub exit" sync
+  under_control || die "this $ROLE doesn't follow control: ./vpn.sh $ROLE control set TOKEN"
   dns_enabled || die "no CONTROL_DOMAIN: snapshots come by ssh only (./vpn.sh hub control apply)"
   need_dig
+  if [[ $ROLE == exit ]]; then
+    update_sync
+    return
+  fi
   applied=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
   for d in $(control_domains); do
     for r in ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}; do
-      head=$(dns_txt "head.$d" "$r")
-      [[ $head =~ ^cvpn1\ v=([0-9]+)\ n=([0-9]+)\ sha256=([0-9a-f]{64})$ ]] || continue
+      read -r v n sha < <(dns_head "$d" "$r" head) || continue
       answered=true
-      v=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]} sha=${BASH_REMATCH[3]}
       ((v > newest)) && newest=$v
-      ((v > applied && n > 0 && n <= 500)) || continue
-      line=
-      for ((i = 0; i < n; i++)); do
-        piece=$(dns_txt "v$v-$i.$d" "$r")
-        [[ -n $piece ]] || break
-        line+=$piece
-      done
-      if [[ $(sha256 "$line") != "$sha" ]]; then
+      ((v > applied)) || continue
+      if ! line=$(dns_line "$d" "$r" v "$v" "$n" "$sha"); then
         warn "v$v of $d through $r: pieces are missing or don't match head"
         continue
       fi
       touch "$SYNCED_FILE"
       hub_status synced "\"$(date -u +%FT%TZ)\""
       state_apply - <<<"$line"
+      update_sync
       return
     done
   done
@@ -206,6 +239,7 @@ cmd_sync() {
   hub_status synced "\"$(date -u +%FT%TZ)\""
   hub_status_snapshot
   info "up to date: v$applied"
+  update_sync
 }
 
 install_sync_timer() {
@@ -215,7 +249,7 @@ install_sync_timer() {
   fi
   cat >/etc/systemd/system/vpn-sync.service <<EOF
 [Unit]
-Description=VPN: apply control's snapshot from DNS
+Description=VPN: read control's snapshot and orders from DNS
 
 [Service]
 Type=oneshot
@@ -223,7 +257,7 @@ ExecStart=$PWD/vpn.sh -y sync
 EOF
   cat >/etc/systemd/system/vpn-sync.timer <<EOF
 [Unit]
-Description=Read control's snapshot from DNS every $SYNC_EVERY
+Description=Read control's records from DNS every $SYNC_EVERY
 
 [Timer]
 OnBootSec=1min
@@ -235,7 +269,7 @@ WantedBy=timers.target
 EOF
   systemctl daemon-reload
   systemctl enable -q --now vpn-sync.timer
-  info "vpn-sync.timer enabled: reads control's snapshot from DNS every $SYNC_EVERY"
+  info "vpn-sync.timer enabled: reads control's records from DNS every $SYNC_EVERY"
 }
 
 remove_sync_timer() {
@@ -246,19 +280,19 @@ remove_sync_timer() {
   info "vpn-sync.timer removed"
 }
 
-# check on a managed hub; uses report from cmd_check
+# check on a hub or an exit under control; uses report from cmd_check
 check_sync() {
   local age domains
   domains=$(control_domains_line)
   [[ -n $domains ]] || return 0
   if [[ ! -f $SYNCED_FILE ]]; then
-    report dns "FAIL: not read from $domains yet (./vpn.sh hub control sync)"
+    report dns "FAIL: not read from $domains yet ($(vsh control sync))"
     return
   fi
   age=$(($(date +%s) - $(date -r "$SYNCED_FILE" +%s)))
   if ((age <= SYNC_MAX_AGE)); then
     report dns "ok ($domains, read $((age / 60)) min ago)"
   else
-    report dns "FAIL: $domains unreadable for $((age / 60)) min (./vpn.sh hub control sync)"
+    report dns "FAIL: $domains unreadable for $((age / 60)) min ($(vsh control sync))"
   fi
 }

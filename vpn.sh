@@ -60,15 +60,22 @@ within minutes.
                                             its IPs become routes NAME/IPNAME
   ./vpn.sh control exit del NAME
   ./vpn.sh control exit list
+  ./vpn.sh control exit token NAME          the command that makes the exit follow control's
+                                            code updates (once, on the exit)
   ./vpn.sh control route list               who leaves through which routes
+                                            (local, none = RU only, EXIT/IPNAME)
   ./vpn.sh control route ip [ROUTE]         the IP each route leaves from, on every hub
                                             (their last check)
-                                            (local, none = RU only, EXIT/IPNAME)
   ./vpn.sh control hub add NAME TOKEN       a hub from `./vpn.sh hub control join` there;
                                             prints the token for `hub control set`
   ./vpn.sh control hub token NAME           print that token again
   ./vpn.sh control hub del NAME             the hub can't read new snapshots
   ./vpn.sh control hub list
+  ./vpn.sh control hub update [NAME|--all [COMMIT|-]]
+  ./vpn.sh control exit update [NAME|--all [COMMIT|-]]
+                                            run COMMIT (the branch's last one) there, after
+                                            publish: forward only, back if its check gets
+                                            worse; - : no order; none: the orders
   ./vpn.sh control check                    the whole system: DNS, every hub (snapshot, DNS,
                                             its own check, subscription), every route
   ./vpn.sh control dns                      the control domains: zones, what DNS gives
@@ -84,7 +91,7 @@ Hub: people connect here.
   ./vpn.sh hub control join                 print the token for `control hub add`
   ./vpn.sh hub control set TOKEN            trust that control, take its snapshots from DNS
                                             (vpn-sync.timer, every 5 min)
-  ./vpn.sh hub control sync                 take the snapshot from DNS now
+  ./vpn.sh hub control sync                 take the snapshot (and update order) from DNS now
   ./vpn.sh hub control apply [FILE]         apply a snapshot by hand (stdin by default):
                                             ssh HUB './vpn.sh hub control apply' < state.txt
   ./vpn.sh hub control export               this stand-alone hub's users, for `control import`
@@ -105,6 +112,9 @@ Exit: hubs leave through it.
   ./vpn.sh exit hub token NAME              print it again (with IPs added since)
   ./vpn.sh exit hub del NAME                hubs with this token can't connect anymore
   ./vpn.sh exit hub list
+  ./vpn.sh exit control set TOKEN           follow control's code updates (from DNS, every
+                                            5 min); the token: control exit token NAME
+  ./vpn.sh exit control sync | unset        look now | stop following
 
 EOF
   show "client" <<'EOF'
@@ -121,9 +131,10 @@ Every server (./vpn.sh ${role:-ROLE} ...):
   check                   health of this server (hourly from vpn-maintenance.timer)
   prune                   hourly upkeep: expired credentials, RU lists, subscription
   render                  render configs into generated/ and validate them
-  update images|repo|rules
+  update images|repo [COMMIT]|rules
                           sing-box / caddy images; this code from GitHub (keeps keys,
-                          users, certificates); the RU lists (hub)
+                          users, certificates; COMMIT: that one of the branch); the RU
+                          lists (hub)
   firewall [--dry-run]    ufw for ssh, the VPN ports and other listening services,
                           optionally key-only SSH
   tune                    BBR and bigger UDP buffers (sysctl)
@@ -152,6 +163,7 @@ EOF
 . lib/control.sh
 . lib/dns.sh
 . lib/client.sh
+. lib/remote.sh
 
 # --- main --------------------------------------------------------------------
 
@@ -166,7 +178,7 @@ cmd=${1:-help}
 # Tree form: ./vpn.sh ROLE OBJECT ACTION. The role word is this server's role; on
 # a server without .env it picks the role (./vpn.sh exit deploy). A role word
 # that is also an object here (exit / control on a hub, hub / exit in control,
-# hub on an exit) keeps meaning the object: ./vpn.sh exit add on a hub.
+# hub / control on an exit) keeps meaning the object: ./vpn.sh exit add on a hub.
 if [[ " hub exit client control " == *" $cmd "* ]]; then
   own=$(env_role)
   if [[ ! -f $ENV_FILE ]]; then
@@ -180,9 +192,12 @@ if [[ " hub exit client control " == *" $cmd "* ]]; then
   else
     # Actions of the object with that name here; anything else is the other role's tree
     case $own:$cmd in
-      hub:exit | control:exit) actions="add del list" ;;
+      hub:exit) actions="add del list" ;;
+      control:exit) actions="add del list update token" ;;
       hub:control) actions="join set unset sync apply export" ;;
-      control:hub | exit:hub) actions="add token del list" ;;
+      exit:control) actions="set unset sync" ;;
+      control:hub) actions="add token del list update" ;;
+      exit:hub) actions="add token del list" ;;
       *) actions="" ;;
     esac
     [[ -n $actions && " $actions " == *" ${1:-add} "* ]] ||
