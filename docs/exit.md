@@ -25,6 +25,16 @@ git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn && cd /opt/
 
 Поменять IP или имя: правка `EXIT_IPS`, `./vpn.sh exit up`, затем `./vpn.sh exit hub token main` и новый токен — `exit add` с тем же именем в control. Пока токен не обновлен, маршруты с удаленными IP не работают (переключения на другой IP нет).
 
+## Обновление из control
+
+```sh
+./vpn.sh exit update repo                   # руками: последний коммит ветки
+./vpn.sh exit control set 'cvpn-ctl:…'      # один раз: слушать приказы control (токен: control exit token NAME)
+./vpn.sh exit check                         # строка update: на каком коммите, что вышло с приказом
+```
+
+После `exit control set` exit раз в 5 минут (`vpn-sync.timer`) читает из DNS зашифрованную запись приказов control и, если ему приказан новый коммит, обновляется: только вперед по ветке своего `REPO_URL`, до и после — `check`, если стало хуже — назад на прежний коммит. Больше exit от control ничего не получает: ни пользователей, ни схемы. Токен содержит ключ приказов — его не публиковать. `./vpn.sh exit control unset` — перестать слушать.
+
 ## Безопасность
 
 - Трафик уходит только с IP своего ключа, маршрута по умолчанию нет. IPv6 закрыт (выход только с IPv4 из `EXIT_IPS`), приватные сети и адреса самого exit'а — тоже.

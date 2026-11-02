@@ -48,7 +48,7 @@
 ./vpn.sh hub update rules    # хаб: скачать списки RU заново (таймер делает это раз в сутки)
 ```
 
-`update repo` показывает новые коммиты и изменяемые файлы, спрашивает, бэкапит `.env` и списки в `backups/` и сверяет их после. Локальные правки отслеживаемых файлов (шаблоны, `compose.yaml`) теряются — об этом предупредит. Каталог без git при первом запуске становится git-checkout'ом. Control обновляется `git pull`; если меняется формат снимка — сначала хабы, потом control.
+`update repo` показывает новые коммиты и изменяемые файлы, спрашивает, бэкапит `.env` и списки в `backups/` и сверяет их после. Локальные правки отслеживаемых файлов (шаблоны, `compose.yaml`) теряются — об этом предупредит. Каталог без git при первом запуске становится git-checkout'ом. Control обновляется `git pull`; если меняется формат снимка — сначала хабы, потом control. Хабы и exit'ы можно обновлять из control: `./vpn.sh control hub|exit update` и `publish` ([docs/control.md](docs/control.md#обновление-кода)).
 
 На exit'е и клиенте — то же с `exit` / `client` вместо `hub`. Настройки: правка `.env` (или `templates/*`), затем `./vpn.sh ROLE up`.
 
@@ -97,19 +97,21 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                          route NAME ROUTE|- | group NAME GROUP|- | links [NAME]
                          rotate NAME|--all [--grace HOURS]
                   group  add NAME [ROUTE] | route NAME ROUTE|- | del NAME | list
-                  exit   add NAME TOKEN | del NAME | list
+                  exit   add NAME TOKEN | del NAME | list | token NAME
                   hub    add NAME TOKEN | token NAME | del NAME | list
+                  hub|exit update [NAME|--all [COMMIT|-]]   (код на хабах / exit'ах, после publish)
                   route  list | ip [ROUTE]
                   diff | publish | check | dns | import FILE | prune
 
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
                   user …, group …, exit …, route list|ip   (как в control; под control — только просмотр)
-                  update repo|images|rules | firewall [--dry-run] | tune | install-docker | uninstall
+                  update repo [COMMIT]|images|rules | firewall [--dry-run] | tune | install-docker | uninstall
 
 ./vpn.sh exit     deploy | init | up | down | logs | check | prune | render
                   hub    add NAME | token NAME | del NAME | list
-                  update repo|images | firewall [--dry-run] | tune | install-docker | uninstall
+                  control set TOKEN | sync | unset         (обновления кода из control)
+                  update repo [COMMIT]|images | firewall [--dry-run] | tune | install-docker | uninstall
 
 ./vpn.sh client   deploy | init | up | down | logs | check | refresh | render
                   update repo|images | firewall [--dry-run] | tune | install-docker | uninstall

@@ -235,12 +235,36 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 ```
 
 - **Ноутбук потерян, ключ не утек** (диск зашифрован): восстановить каталог из бэкапа на новом ноутбуке — хабы продолжат принимать снимки.
-- **Ключ подписи мог утечь**: удалить `data/control/sign*`, `./vpn.sh control init` (новый ключ), затем для каждого хаба `./vpn.sh control hub token NAME` и на хабе `./vpn.sh hub control set 'cvpn-ctl:...'` — хаб перестанет доверять старому ключу. Сменить пароль DNS-панели. Если утекли и списки (`users.conf`) — `user rotate --all`.
+- **Ключ подписи мог утечь**: удалить `data/control/sign*`, `./vpn.sh control init` (новый ключ), затем для каждого хаба `./vpn.sh control hub token NAME` и на хабе `./vpn.sh hub control set 'cvpn-ctl:...'` — хаб перестанет доверять старому ключу. Для exit'ов под control — `./vpn.sh control exit token NAME` и на exit'е `./vpn.sh exit control set …`. Ключ приказов (`data/control/update.key`) тоже сменить: удалить его — `publish` создаст новый и раздаст хабам, exit'ам — новыми токенами. Сменить пароль DNS-панели. Если утекли и списки (`users.conf`) — `user rotate --all`.
 - **Бэкапа нет**: на любом хабе `hub control unset`, `hub control export` → `import` в новый control, затем подключить хабы заново (как «хаб, который уже работал»).
 
 ## Обновление кода
 
-У control нет `update repo`: `git pull` в `~/vpn-control`. Если меняется формат снимка, сначала обновить хабы (`./vpn.sh update repo` на каждом), потом control: старый хаб не применит снимок нового формата (`unknown format`) и останется на прежнем.
+У control нет `update repo`: `git pull` в `~/vpn-control`. Если меняется формат снимка, сначала обновить хабы, потом control: старый хаб не применит снимок нового формата (`unknown format`) и останется на прежнем.
+
+Хабы и exit'ы обновляются отсюда — приказом, который уходит с `publish`:
+
+```sh
+./vpn.sh control hub update hub1                 # hub1 — на последний коммит ветки
+./vpn.sh control hub update --all 93bc1fc        # все хабы — на этот коммит
+./vpn.sh control exit update --all               # все exit'ы
+./vpn.sh control diff                            # update + hub hub1: to 93bc1fc…
+./vpn.sh control publish
+./vpn.sh control hub update                      # приказы и на каком коде хабы (их status.json)
+./vpn.sh control check                           # hub ok (hub1: …, code 93bc1fc, …)
+```
+
+- Сервер раз в 5 минут (`vpn-sync.timer`) читает приказ и делает `update repo` до этого коммита — только вперед по ветке своего `REPO_URL`: коммит старее того, что на сервере, или с другой ветки он не возьмет (`update FAIL: …` в его `check`).
+- До и после — `check`. Если после обновления падает то, что раньше работало, сервер возвращается на прежний коммит и этот приказ больше не пробует; повторить — отдать приказ снова (`hub update hub1 COMMIT` и `publish`).
+- `- ` вместо коммита снимает приказ (сервер остается на том коде, что есть). Без коммита — последний коммит ветки на GitHub (`git ls-remote`); короткий коммит берется из `~/vpn-control`, если он там есть.
+- Exit'ы о себе не сообщают: что вышло — `./vpn.sh exit check` на exit'е (строка `update`). Хабы сообщают в `status.json`, и `control check` падает, если хаб через 15 минут после приказа не на нем.
+- Обновление перезапускает sing-box там, где поменялся конфиг: соединения рвутся на несколько секунд, как при ручном `update repo`.
+
+Подготовка, один раз:
+- **хабы** — на коде с этой функцией (`./vpn.sh hub update repo` руками в последний раз); ключ для приказов приходит им в снимке, команд на хабе не нужно;
+- **exit'ы** — то же, и на каждом `./vpn.sh exit control set '…'` из `./vpn.sh control exit token NAME` (в токене ключ приказов — не публиковать). С этого момента на exit'е тоже `vpn-sync.timer`; `exit control unset` — перестать слушать control.
+
+Приказы лежат в DNS рядом со снимком (`upd.<домен>`), зашифрованы ключом приказов и подписаны ключом control; кому приказ — хеш ключа сервера (age хаба, REALITY exit'а), а не имя. Снаружи не видно ни имен, ни коммитов.
 
 ## Команды control
 
@@ -254,6 +278,8 @@ tar -czf - .env *.conf data/control | age -p > ~/vpn-control-$(date +%F).tar.gz.
 | `route list` | кто через что выходит |
 | `route ip [ROUTE]` | с какого IP выходит маршрут на каждом хабе (по их последнему `check`) |
 | `hub add NAME TOKEN` / `token NAME` / `del NAME` / `list` | хабы |
+| `hub update [NAME\|--all [COMMIT\|-]]`, `exit update …` | на каком коде быть хабам / exit'ам (после `publish`); без имени — приказы |
+| `exit token NAME` | команда для exit'а, чтобы он слушал приказы control |
 | `user links [NAME]` | ссылки пользователя на каждом хабе |
 | `user rotate NAME\|--all [--grace H]` | новые ключи, старые работают еще H часов |
 | `import FILE` | забрать пользователей самостоятельного хаба (`hub control export` на нем) |
