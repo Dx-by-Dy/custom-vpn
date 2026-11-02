@@ -100,7 +100,7 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                   exit   add NAME TOKEN | del NAME | list
                   hub    add NAME TOKEN | token NAME | del NAME | list
                   route  list
-                  check | dns | publish | import FILE | prune
+                  diff | publish | check | dns | import FILE | prune
 
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
