@@ -71,19 +71,25 @@ cmd_update_repo() {
   local want=${1:-}
   load_env
   local url=${REPO_URL:-$DEFAULT_REPO_URL} branch=${REPO_BRANCH:-$DEFAULT_REPO_BRANCH}
-  local new old tracked index changes
+  local new old tracked index changes fetched=true
 
   need_pkg git "updates are fetched with it"
   # A copy owned by another user (scp, rsync) is "dubious ownership" to git
   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$PWD
   # Deployments copied without .git become a checkout on the first update
   [[ -d .git ]] || git init -q
-  git fetch -q "$url" "$branch" || die "can't fetch $branch from $url"
-  new=$(git rev-parse FETCH_HEAD)
   old=$(git rev-parse -q --verify HEAD || true)
+  if ! git fetch -q "$url" "$branch"; then
+    # A commit this checkout already has doesn't need GitHub: going back on a bad day
+    [[ -n $want && -n $old ]] && git merge-base --is-ancestor "$want" "$old" 2>/dev/null ||
+      die "can't fetch $branch from $url"
+    warn "can't fetch $branch from $url; ${want:0:12} is here already"
+    fetched=false
+  fi
+  $fetched && new=$(git rev-parse FETCH_HEAD)
   if [[ -n $want ]]; then
     git cat-file -e "$want^{commit}" 2>/dev/null || die "no commit $want in $url ($branch)"
-    git merge-base --is-ancestor "$want" FETCH_HEAD 2>/dev/null ||
+    ! $fetched || git merge-base --is-ancestor "$want" FETCH_HEAD 2>/dev/null ||
       { [[ -n $old ]] && git merge-base --is-ancestor "$want" "$old" 2>/dev/null; } ||
       die "$want isn't on $branch of $url"
     new=$(git rev-parse "$want^{commit}")

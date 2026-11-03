@@ -4,7 +4,10 @@
 #   $ips       egress IPs (EXIT_IPS)
 #   $host_ips  this host's own addresses (/32, /128)
 # Traffic leaves only through the egress IP of the credential it came with;
-# there is no default route.
+# there is no default route. One exception, for hubs: the name below reaches this
+# exit's status file (/status, data/status on the host), served by sing-box itself
+# on localhost, so an exit needs no open port and no process for it.
+def status_port: ($ENV.CHECK_PORT | tonumber) + 1;
 {
   log: {level: "warn"},
   dns: {servers: [{type: "https", tag: "doh", server: "1.1.1.1"}]},
@@ -35,12 +38,13 @@
       users: [$ips[] | {username: "check@\(.)", password: $ENV.CHECK_TOKEN}]
     }
   ],
-  outbounds: [$ips[] | {type: "direct", tag: "ip-\(.)", inet4_bind_address: .}],
+  outbounds: ([$ips[] | {type: "direct", tag: "ip-\(.)", inet4_bind_address: .}] + [{type: "direct", tag: "status"}]),
   route: {
     default_domain_resolver: "doh",
     rules: ([
       {action: "sniff"},
       {protocol: "bittorrent", action: "reject"},
+      {domain: ["status.cvpn.internal"], action: "route", outbound: "status", override_address: "127.0.0.1", override_port: status_port},
       # Egress IPs are IPv4: names resolve to IPv4 only and IPv6 destinations are
       # dropped, otherwise they would leave from another address of the host
       {action: "resolve", strategy: "ipv4_only"},
@@ -53,5 +57,6 @@
         outbound: "ip-\($ip)"
       }]
     + [{action: "reject"}])
-  }
+  },
+  experimental: {clash_api: {external_controller: "127.0.0.1:\(status_port)", external_ui: "/status", secret: $ENV.CHECK_TOKEN}}
 }

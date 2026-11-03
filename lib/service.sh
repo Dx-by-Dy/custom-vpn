@@ -254,10 +254,12 @@ cmd_check() {
     return $failed
   fi
 
+  check_code
   [[ $ROLE == exit ]] || check_hub_cert
   [[ $ROLE == exit ]] || check_control
   if [[ $ROLE == exit ]] && under_control; then check_sync; fi
   check_update
+  check_stable
   if reality_target_ok; then
     report reality "ok ($REALITY_SNI via $REALITY_TARGET)"
   else
@@ -278,7 +280,7 @@ cmd_check() {
   if [[ $ROLE == hub ]]; then check_routes; else check_egress; fi
   # for `control check`
   [[ $ROLE != hub ]] || hub_status_snapshot
-  [[ $ROLE != hub ]] || hub_status check "$(printf '%s\n' "${lines[@]}" |
+  server_status check "$(printf '%s\n' "${lines[@]}" |
     jq -Rn --arg at "$(date -u +%FT%TZ)" --argjson failed "$failed" '{at: $at, failed: ($failed == 1), lines: [inputs]}')"
   return $failed
 }

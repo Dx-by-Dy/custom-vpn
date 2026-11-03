@@ -71,6 +71,9 @@ within minutes.
   ./vpn.sh control site route DOMAIN...     never RU: by the route of the user
   ./vpn.sh control site del DOMAIN...       the RU lists decide again
   ./vpn.sh control site list
+  ./vpn.sh control stable [COMMIT|-]        the commit known to be good: servers keep it (after
+                                            publish) with a way back that needs no working code
+  ./vpn.sh control rollback NAME...|--all   hubs and exits back to it, published at once
   ./vpn.sh control hub add NAME TOKEN       a hub from `./vpn.sh hub control join` there;
                                             prints the token for `hub control set`
   ./vpn.sh control hub token NAME           print that token again
@@ -80,7 +83,8 @@ within minutes.
   ./vpn.sh control exit update [NAME|--all [COMMIT|-]]
                                             run COMMIT (the branch's last one) there, after
                                             publish: forward only, back if its check gets
-                                            worse; - : no order; none: the orders
+                                            worse; - : no order; none: every server's order,
+                                            code and last report (exits through the hubs)
   ./vpn.sh control check                    the whole system: DNS, every hub (snapshot, DNS,
                                             its own check, subscription), every route
   ./vpn.sh control dns                      the control domains: zones, what DNS gives
@@ -101,6 +105,9 @@ Hub: people connect here.
                                             ssh HUB './vpn.sh hub control apply' < state.txt
   ./vpn.sh hub control export               this stand-alone hub's users, for `control import`
   ./vpn.sh hub control unset                manage users here again
+  ./vpn.sh hub rollback [COMMIT]            back to control's stable commit (or COMMIT) from here,
+                                            without control; sh data/control/rollback.sh if vpn.sh
+                                            itself is broken. Control's older orders wait
  Stand-alone (not under control): the same objects as in control, here
   ./vpn.sh hub user add|del|list|route|group|links|rotate ...
   ./vpn.sh hub group add|route|del|list ...
@@ -121,6 +128,8 @@ Exit: hubs leave through it.
   ./vpn.sh exit control set TOKEN           follow control's code updates (from DNS, every
                                             5 min); the token: control exit token NAME
   ./vpn.sh exit control sync | unset        look now | stop following
+  ./vpn.sh exit rollback [COMMIT]           back to control's stable commit (or COMMIT) from here;
+                                            sh data/control/rollback.sh if vpn.sh itself is broken
 
 EOF
   show "client" <<'EOF'
@@ -214,13 +223,13 @@ if [[ " hub exit client control " == *" $cmd "* ]]; then
   fi
 fi
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | protocol | site | control | state | sync | publish | import) lock ;;
+  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | protocol | site | stable | control | state | sync | publish | import) lock ;;
 esac
 # Control is a laptop: nothing to run or check there
 case $(env_role) in
   control)
     case $cmd in
-      init | user | links | rotate | prune | exit | group | route | site | hub | publish | diff | import | up | check | dns | help | -h | --help) ;;
+      init | user | links | rotate | prune | exit | group | route | site | stable | rollback | hub | publish | diff | import | up | check | dns | help | -h | --help) ;;
       *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
     esac
     ;;
@@ -248,6 +257,8 @@ case $cmd in
   route) cmd_route "$@" ;;
   site) cmd_site "$@" ;;
   protocol) cmd_protocol "$@" ;;
+  stable) cmd_stable "$@" ;;
+  rollback) cmd_rollback "$@" ;;
   control) cmd_control "$@" ;;
   state) cmd_state "$@" ;;
   sync) cmd_sync ;;

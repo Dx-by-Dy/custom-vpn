@@ -11,6 +11,13 @@
 # server's key (a hub's age recipient, an exit's REALITY public key), not for
 # its name. A server only moves forward along REPO_BRANCH of its own REPO_URL,
 # runs check before and after, and goes back if the update broke something.
+#
+# The one way back: `control stable COMMIT` names a commit known to be good, the
+# record carries it, and every server keeps it with a script of plain git
+# commands (STABLE_SCRIPT), which works when the code at HEAD is what's broken.
+# `control rollback` orders servers there ("back" in the order); `rollback` on a
+# server runs the script. An order goes back only to a commit this server ran
+# itself (its reflog), so control's key alone can't send it to any old commit.
 
 UPDATES_FILE=$CONTROL_DIR/updates.conf
 UPDATES_HEADER='# kind  name  commit  ordered-at   (control hub|exit update)'
@@ -18,6 +25,11 @@ UPDATE_FILE=$OUT/update.txt
 UPDATE_KEY=$CONTROL_DIR/update.key
 UPDATE_STATE=$CONTROL_DIR/update.json
 UPDATE_NAMESPACE=cvpn-update
+# The stable commit: control's, what a server was told, how the server gets there
+STABLE_FILE=$CONTROL_DIR/stable
+STABLE_SCRIPT=$CONTROL_DIR/rollback.sh
+# A server sent back by hand: control's orders from before this time wait
+UPDATE_HOLD=$CONTROL_DIR/update.hold
 # Seconds for restarted containers to come up before the check after an update
 UPDATE_SETTLE=${UPDATE_SETTLE:-10}
 
@@ -111,31 +123,109 @@ control_update() {
   control_changed
 }
 
-# The orders of KIND, and what the hubs say they run
+# Every hub or exit of KIND: its order, and what it says it runs (exits through the hubs)
 update_list() {
-  local kind=$1 hubs n commit at status code result
+  local kind=$1 hubs n commit at when status code result names reports=
   hubs=$(control_hubs_json)
-  printf '%-12s %-14s %-12s %s\n' "${kind^^}" ORDERED SINCE "RUNS (last report)"
-  while read -r n commit at; do
-    code="?" result=
+  if [[ $kind == hub ]]; then
+    names=$(jq -r '.[].name' <<<"$hubs")
+  else
+    names=$(conf_rows "$EXITS_FILE" | awk '{print $1}')
+    reports=$(control_hub_statuses | exit_reports_of)
+  fi
+  printf '%-12s %-14s %-12s %-14s %-10s %s\n' "${kind^^}" ORDERED SINCE RUNS SING-BOX "LAST REPORT"
+  for n in $names; do
+    commit=- at= when=-
+    read -r commit at < <(conf_rows "$UPDATES_FILE" | awk -v k="$kind" -v n="$n" '$1 == k && $2 == n {print $3, $4}') || true
+    [[ -n $commit ]] || commit=-
+    [[ -z ${at:-} ]] || when=$(date -d "@$at" '+%m-%d %H:%M')
     if [[ $kind == hub ]]; then
       status=$(jq -r --arg n "$n" '.[] | select(.name == $n) | "\(.domain) \(.sub_port) \(.recipient)"' <<<"$hubs" | {
         read -r d p r && hub_status_get "$d" "$p" "$r"
       } || true)
-      code=$(jq -r '.update.code // "?" | .[:12]' <<<"$status" 2>/dev/null || echo "?")
-      result=$(jq -r '.update.result // empty' <<<"$status" 2>/dev/null || true)
     else
-      result="(exits don't report: ./vpn.sh exit check there)"
+      status=$(jq -c --arg n "$n" '.[$n] // empty' <<<"$reports")
     fi
-    printf '%-12s %-14s %-12s %s\n' "$n" "${commit:0:12}" "$(date -d "@$at" '+%m-%d %H:%M')" "$code ${result:+$result}"
-  done < <(conf_rows "$UPDATES_FILE" | awk -v k="$kind" '$1 == k {print $2, $3, $4}')
+    code=$(jq -r '.update.code // .code // "?" | .[:12]' <<<"$status" 2>/dev/null || echo "?")
+    result=$(jq -r '.update.result // empty' <<<"$status" 2>/dev/null || true)
+    [[ $kind == hub || -n $status ]] || result="no report yet (down, or its code or the hubs' is older)"
+    [[ $kind == hub || -z $status ]] || result+=" (heard by $(jq -r .via <<<"$status") $(mins_since "$(jq -r .seen <<<"$status")") min ago)"
+    printf '%-12s %-14s %-12s %-14s %-10s %s\n' "$n" "${commit:0:12}" "$when" "${code:-?}" \
+      "$(jq -r '.sing_box // "?"' <<<"$status" 2>/dev/null || echo "?")" "$result"
+  done
+}
+
+# control stable [COMMIT|-]: the commit to go back to
+cmd_stable() {
+  local c=${1:-} commit
+  require_role control stable
+  if [[ -z $c ]]; then
+    commit=$(cat "$STABLE_FILE" 2>/dev/null || true)
+    if [[ -z $commit ]]; then
+      echo "No stable commit. Name one that works: $(vsh stable) COMMIT, then $(vsh publish)"
+    else
+      echo "Stable: $(git_here log -1 --format='%h %cs %s' "$commit" 2>/dev/null || echo "${commit:0:12}")"
+      echo "Servers go back to it with: $(vsh rollback) NAME...|--all"
+    fi
+    return
+  fi
+  if [[ $c == - ]]; then
+    mkdir -p "$CONTROL_DIR"
+    rm -f "$STABLE_FILE"
+    control_changed
+    info "no stable commit any more"
+    return
+  fi
+  commit=$(update_resolve "$c")
+  git_here cat-file -e "$commit^{commit}" 2>/dev/null || die "${commit:0:12} isn't in this checkout: git pull, or check the commit"
+  # Code from before this function would go forward again by itself, and has no way back
+  git_here grep -q STABLE_SCRIPT "$commit" -- lib/remote.sh ||
+    die "${commit:0:12} is older than rollbacks: a server on it couldn't follow them. Name a newer commit"
+  mkdir -p "$CONTROL_DIR"
+  echo "$commit" >"$STABLE_FILE"
+  control_changed
+  info "stable: $(git_here log -1 --format='%h %cs %s' "$commit"); publish to tell the servers"
+}
+
+# control rollback NAME...|--all: hubs and exits to the stable commit, published now
+control_rollback() {
+  local stable name n at found targets=() kinds
+  lock
+  stable=$(cat "$STABLE_FILE" 2>/dev/null || true)
+  [[ -n $stable ]] || die "no stable commit: $(vsh stable) COMMIT. By hand on a server: ./vpn.sh hub update repo COMMIT"
+  (($#)) || die "usage: $(vsh rollback) NAME...|--all (stable: ${stable:0:12})"
+  conf_init "$UPDATES_FILE" "$UPDATES_HEADER"
+  kinds=$(control_hubs_json | jq -r '.[].name | "hub \(.)"'; conf_rows "$EXITS_FILE" | awk '{print "exit", $1}')
+  for name in "$@"; do
+    found=false
+    while read -r n; do
+      [[ -n $n ]] || continue
+      if [[ $name == --all || ${n#* } == "$name" ]]; then targets+=("$n"); found=true; fi
+    done <<<"$kinds"
+    $found || die "no hub or exit $name"
+  done
+  if control_pending; then
+    echo "Publishing sends these too:"
+    cmd_control_diff
+    ask "Publish them with the rollback?" n || return 0
+  fi
+  at=$(date +%s)
+  for n in "${targets[@]}"; do
+    conf_rewrite "$UPDATES_FILE" -v k="${n% *}" -v n="${n#* }" '/^#/ || $1 != k || $2 != n'
+    echo "$n $stable $at back" >>"$UPDATES_FILE"
+  done
+  info "back to ${stable:0:12}: $(printf '%s ' "${targets[@]#* }")"
+  cmd_publish
+  echo "Servers read it within 5 min + DNS TTL; at once, on a server: ./vpn.sh hub|exit control sync"
+  echo "See it: $(vsh check). They stay there until the next $(vsh hub update) / $(vsh exit update)."
+  echo "A server that can't (DNS, broken code), on it: sh $STABLE_SCRIPT"
 }
 
 # Build UPDATE_FILE for snapshot VERSION (control's publish)
 update_build() {
-  local version=$1 hubs=$2 kind name commit at pub orders='{}' tmp
+  local version=$1 hubs=$2 kind name commit at back pub orders='{}' tmp
   control_update_key >/dev/null
-  while read -r kind name commit at; do
+  while read -r kind name commit at back; do
     if [[ $kind == hub ]]; then
       pub=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .recipient' <<<"$hubs")
     else
@@ -145,11 +235,13 @@ update_build() {
       warn "update order for $kind $name: there's no such $kind any more ($(vsh "$kind" update) $name -)"
       continue
     fi
-    orders=$(jq -c --arg id "$(update_id "$pub")" --arg c "$commit" --argjson at "$at" '. + {($id): {commit: $c, at: $at}}' <<<"$orders")
+    orders=$(jq -c --arg id "$(update_id "$pub")" --arg c "$commit" --argjson at "$at" --arg back "$back" \
+      '. + {($id): ({commit: $c, at: $at} + (if $back == "back" then {back: true} else {} end))}' <<<"$orders")
   done < <(conf_rows "$UPDATES_FILE")
   tmp_dir tmp
-  jq -n --argjson version "$version" --arg domains "$(control_domains_line)" --argjson orders "$orders" '
-    {v: 1, version: $version, domains: $domains, orders: $orders}' |
+  jq -n --argjson version "$version" --arg domains "$(control_domains_line)" --argjson orders "$orders" \
+    --arg stable "$(cat "$STABLE_FILE" 2>/dev/null || true)" '
+    {v: 1, version: $version, domains: $domains, orders: $orders} + (if $stable != "" then {stable: $stable} else {} end)' |
     gzip -9 | age -r "$(age-keygen -y "$UPDATE_KEY")" -o "$tmp/data"
   ssh-keygen -Y sign -q -f "$CONTROL_DIR/sign" -n "$UPDATE_NAMESPACE" "$tmp/data"
   printf 'cvpn-upd1.%s.%s\n' "$(base64 -w0 "$tmp/data.sig")" "$(base64 -w0 "$tmp/data")" >"$UPDATE_FILE.tmp"
@@ -197,7 +289,74 @@ update_sync() {
       info "control domains now: $d"
     fi
   fi
+  stable_keep "$(jq -r '.stable // empty' <<<"$json")"
   update_run "$(jq -c --arg id "$(update_my_id)" '.orders[$id] // empty' <<<"$json")"
+}
+
+# rollback_script COMMIT: going back with nothing of the code at HEAD: the lock (a
+# hung holder doesn't stop this), the state saved, the hold, git, then the deploy
+# of the commit's own code
+rollback_script() {
+  cat <<EOF
+#!/bin/sh
+# Written by vpn.sh: back to ${1:0:12}, without the code at HEAD. By hand: sh $STABLE_SCRIPT
+set -e
+cd $(printf '%q' "$PWD")
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="\$PWD"
+exec 9>.vpn.lock
+flock -w 120 9 || echo "warning: another vpn.sh holds the lock, going on" >&2
+mkdir -p backups "$CONTROL_DIR"
+chmod 700 backups
+tar -czf "backups/state-\$(date +%Y%m%d-%H%M%S).tar.gz" \$(ls -d ${CONF_FILES[*]} 2>/dev/null)
+date +%s >"$UPDATE_HOLD"
+git reset -q --hard $1
+exec 9>&-
+echo ">> code at ${1:0:12}; control's older orders wait, a new one lifts this"
+exec ./vpn.sh -y deploy
+EOF
+}
+
+# The stable commit control names: keep it here, with its objects, for a day
+# without GitHub, and the script to go back to it
+stable_keep() {
+  local c=$1
+  if [[ -z $c ]]; then
+    rm -f "$STABLE_FILE" "$STABLE_SCRIPT"
+    return 0
+  fi
+  [[ $c =~ ^[0-9a-f]{40}$ ]] || { warn "control named a bad stable commit: $c"; return 0; }
+  echo "$c" >"$STABLE_FILE"
+  git_here cat-file -e "$c^{commit}" 2>/dev/null ||
+    git_here fetch -q "${REPO_URL:-$DEFAULT_REPO_URL}" "${REPO_BRANCH:-$DEFAULT_REPO_BRANCH}" 2>/dev/null || true
+  if git_here cat-file -e "$c^{commit}" 2>/dev/null; then
+    rollback_script "$c" >"$STABLE_SCRIPT.tmp"
+    chmod 700 "$STABLE_SCRIPT.tmp"
+    mv "$STABLE_SCRIPT.tmp" "$STABLE_SCRIPT"
+  else
+    rm -f "$STABLE_SCRIPT"
+  fi
+}
+
+# rollback [COMMIT] on a hub or an exit: the stable commit, or one of this checkout
+cmd_rollback() {
+  local c=${1:-} commit
+  load_env
+  if [[ $ROLE == control ]]; then
+    control_rollback "$@"
+    return
+  fi
+  [[ $ROLE == hub || $ROLE == exit ]] || die "./vpn.sh rollback is for hubs and exits"
+  commit=${c:-$(cat "$STABLE_FILE" 2>/dev/null || true)}
+  [[ -n $commit ]] || die "control hasn't named a stable commit here: $(vsh rollback) COMMIT, or ./vpn.sh control stable COMMIT there"
+  commit=$(git_here rev-parse -q --verify "$commit^{commit}") ||
+    die "${c:-the stable commit} isn't in this checkout (./vpn.sh $ROLE update repo COMMIT needs GitHub)"
+  git_here grep -q STABLE_SCRIPT "$commit" -- lib/remote.sh ||
+    warn "${commit:0:12} is older than rollbacks: if control has an order for this server, it goes forward again (./vpn.sh control $ROLE update NAME -)"
+  echo "Back from $(git_here log -1 --format='%h %s' HEAD | cut -c1-70)"
+  echo "       to $(git_here log -1 --format='%h %s' "$commit" | cut -c1-70)"
+  echo "Containers whose config changes will be restarted: VPN connections drop for a few seconds."
+  ask "Go back?" n || return 0
+  exec sh -c "$(rollback_script "$commit")"
 }
 
 # update_state ORDER CODE RESULT [FAILED]: what came of the order, for check
@@ -209,7 +368,7 @@ update_state() {
     >"$UPDATE_STATE.tmp"
   chmod 600 "$UPDATE_STATE.tmp"
   mv "$UPDATE_STATE.tmp" "$UPDATE_STATE"
-  hub_status update "$(cat "$UPDATE_STATE")"
+  server_status update "$(cat "$UPDATE_STATE")"
 }
 
 # Parts of check that fail now (but update itself)
@@ -217,32 +376,68 @@ update_fails() { ./vpn.sh check 2>&1 | awk '$1 != "update" && $2 ~ /^FAIL/ {prin
 
 # update_run ORDER ({commit, at} or nothing): be at that commit
 update_run() {
-  local order=$1 want key head url=${REPO_URL:-$DEFAULT_REPO_URL} branch=${REPO_BRANCH:-$DEFAULT_REPO_BRANCH} before broke
+  local order=$1 want key at back head url=${REPO_URL:-$DEFAULT_REPO_URL} branch=${REPO_BRANCH:-$DEFAULT_REPO_BRANCH} before broke fetched=true
   head=$(git_here rev-parse -q --verify HEAD 2>/dev/null || echo none)
   if [[ -z $order ]]; then
+    rm -f "$UPDATE_HOLD"
     update_state "" "$head" "no order"
     return 0
   fi
   want=$(jq -r .commit <<<"$order")
-  key="$want $(jq -r .at <<<"$order")"
+  at=$(jq -r .at <<<"$order")
+  back=$(jq -r '.back // false' <<<"$order")
+  key="$want $at"
   [[ $want =~ ^[0-9a-f]{40}$ ]] || { update_state "$want" "$head" "FAIL: control ordered a bad commit: $want"; return 0; }
   if [[ $want == "$head" ]]; then
+    rm -f "$UPDATE_HOLD"
     update_state "$want" "$head" ok
     return 0
+  fi
+  # Sent back by hand: what control ordered before that isn't wanted any more
+  if [[ -s $UPDATE_HOLD ]]; then
+    if ((at <= $(<"$UPDATE_HOLD"))); then
+      update_state "$want" "$head" "FAIL: rolled back by hand to ${head:0:12}; a new order from control lifts this"
+      return 0
+    fi
+    rm -f "$UPDATE_HOLD"
   fi
   # Tried and went back: again only when control orders it again
   [[ $key != "$(jq -r '.failed // empty' "$UPDATE_STATE" 2>/dev/null)" ]] || return 0
 
-  if ! git_here fetch -q "$url" "$branch" 2>/dev/null; then
+  git_here fetch -q "$url" "$branch" 2>/dev/null || fetched=false
+  # Going back doesn't need GitHub if the commit is here
+  if ! $fetched && ! { [[ $back == true ]] && git_here cat-file -e "$want^{commit}" 2>/dev/null; }; then
     update_state "$want" "$head" "FAIL: can't fetch $branch from $url (tries again)"
     return 0
   fi
-  if ! git_here cat-file -e "$want^{commit}" 2>/dev/null || ! git_here merge-base --is-ancestor "$want" FETCH_HEAD; then
+  if $fetched && { ! git_here cat-file -e "$want^{commit}" 2>/dev/null || ! git_here merge-base --is-ancestor "$want" FETCH_HEAD; }; then
     update_state "$want" "$head" "FAIL: ${want:0:12} isn't on $branch of $url" "$key"
     return 0
   fi
   if [[ $head != none ]] && ! git_here merge-base --is-ancestor "$head" "$want"; then
-    update_state "$want" "$head" "FAIL: ${want:0:12} is older than ${head:0:12} here (updates only go forward)" "$key"
+    if [[ $back != true ]]; then
+      update_state "$want" "$head" "FAIL: ${want:0:12} is older than ${head:0:12} here (updates only go forward)" "$key"
+      return 0
+    fi
+    # Control's key alone can't send this server to any old commit
+    if ! git_here reflog --format=%H | grep -qx "$want"; then
+      update_state "$want" "$head" "FAIL: ${want:0:12} never ran here, so no going back to it by order: ./vpn.sh $ROLE rollback $want" "$key"
+      return 0
+    fi
+    info "control orders back to ${want:0:12}, this $ROLE runs ${head:0:12}"
+    exec 9>&-
+    ./vpn.sh -y update repo "$want" || warn "update repo $want failed"
+    sleep "$UPDATE_SETTLE"
+    broke=$(update_fails | paste -sd' ')
+    if [[ $(git_here rev-parse HEAD) != "$want" ]]; then
+      update_state "$want" "$(git_here rev-parse HEAD)" "FAIL: couldn't go back to ${want:0:12}: sh $STABLE_SCRIPT here" "$key"
+    elif [[ -n $broke ]]; then
+      # stays: it's where control said to be, and there's nowhere better
+      update_state "$want" "$want" "FAIL: back at ${want:0:12} as ordered, but check fails at: $broke"
+    else
+      update_state "$want" "$want" ok
+      info "back at ${want:0:12}, as control ordered"
+    fi
     return 0
   fi
 
@@ -262,6 +457,27 @@ update_run() {
   else
     update_state "$want" "$want" ok
     info "now at ${want:0:12}, as control ordered"
+  fi
+}
+
+# The code this server runs, for people and for the status control reads; uses report
+check_code() {
+  local c
+  c=$(git_here rev-parse -q --verify HEAD 2>/dev/null || echo unknown)
+  report code "ok (${c:0:12}, sing-box ${SINGBOX_IMAGE##*:})"
+  server_status code "$(jq -cn --arg c "$c" '$c')"
+  server_status sing_box "$(jq -cn --arg s "${SINGBOX_IMAGE##*:}" '$s')"
+}
+
+# Can this server go back to what control calls stable? uses report
+check_stable() {
+  local c
+  [[ -s $STABLE_FILE ]] || return 0
+  c=$(<"$STABLE_FILE")
+  if [[ -s $STABLE_SCRIPT ]] && git_here cat-file -e "$c^{commit}" 2>/dev/null; then
+    report stable "ok (${c:0:12} is here: ./vpn.sh $ROLE rollback)"
+  else
+    report stable "FAIL: control names ${c:0:12} as stable, it isn't here and can't be fetched: no going back to it"
   fi
 }
 

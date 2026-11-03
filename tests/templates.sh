@@ -221,6 +221,43 @@ routing_test() {
   echo "   the hub's rules: connections leave where they should"
 }
 
+# What an exit says about itself reaches the hubs and control: its real config in
+# sing-box, the hub's fetch through its "tunnel" (the exit's check inbound with the
+# hub's user name), the merge control does. On a copy of hub2, as it stays managed.
+exit_report_test() {
+  local dir=$1 cfg=$WORK/exit-status.json port=$((22000 + $$ % 1000)) h=$1/hub2-t got
+  [[ $(jq -r '.experimental.clash_api.external_controller' "$dir/exit/generated/sing-box.json") == 127.0.0.1:* ]] || fail "exit: no status file server"
+  [[ -f $dir/exit/data/status/index.html ]] || fail "exit: no empty index, sing-box would download a UI"
+  jq --argjson port "$port" '
+    .inbounds = [.inbounds[] | select(.tag == "check-in") | .listen_port = $port | .users += [{username: "check@cz1/ip1", password: .users[0].password}]]
+    | .experimental.clash_api.external_controller = "127.0.0.1:\($port + 1)"
+    | (.route.rules[] | select(.override_address?) | .override_port) = ($port + 1)' "$dir/exit/generated/sing-box.json" >"$cfg"
+  (cd "$dir/exit" && eval "$(sed -n '/^ENV_FILE=/,/^ASSUME_YES=/p' vpn.sh)" && for f in lib/*.sh; do . "$f"; done
+    load_env; EXIT_NAME=cz1 server_status code '"abc123abc123abc123"'; server_status sing_box '"v1"'
+    server_status check '{"at": "2026-01-01T00:00:00Z", "lines": ["egress ok"]}')
+  "$DOCKER" run -d --rm --name "$SB_NAME" --network host -v "$cfg:/c.json:ro,z" -v "$dir/exit/data/status:/status:ro,z" \
+    "$SINGBOX_IMAGE" run -c /c.json >/dev/null
+  sleep 2
+  cp -a "$dir/hub2" "$h"
+  setenv "$h/.env" CHECK_PORT "$port"
+  (cd "$h" && eval "$(sed -n '/^ENV_FILE=/,/^ASSUME_YES=/p' vpn.sh)" && for f in lib/*.sh; do . "$f"; done
+    load_env; hub_exit_reports; cat "$(status_file)") >"$dir/hub-status.json" 2>"$dir/hub-status.log" ||
+    { cat "$dir/hub-status.log"; "$DOCKER" rm -f "$SB_NAME" >/dev/null; fail "the hub's fetch"; }
+  # nothing but the token's path gets through: no list of tokens, no API
+  got=$(curl -s -m 5 --noproxy '' --socks5-hostname "127.0.0.1:$port" --proxy-user "check@cz1/ip1:00112233445566778899aabbccddeeff" http://status.cvpn.internal/ui/)
+  [[ -z $got ]] || { "$DOCKER" rm -f "$SB_NAME" >/dev/null; fail "the status server lists: $got"; }
+  got=$(curl -s -o /dev/null -w '%{http_code}' -m 5 --noproxy '' --socks5-hostname "127.0.0.1:$port" --proxy-user "check@cz1/ip1:00112233445566778899aabbccddeeff" http://status.cvpn.internal/configs)
+  "$DOCKER" rm -f "$SB_NAME" >/dev/null
+  [[ $got == 401 ]] || fail "the sing-box API answers without its secret: $got"
+  jq -e '.exits.cz1.code == "abc123abc123abc123" and .exits.cz1.sing_box == "v1" and (.exits.cz1.seen | type) == "string"' "$dir/hub-status.json" >/dev/null ||
+    fail "the hub didn't hear the exit: $(cat "$dir/hub-status.json")"
+  got=$( (cd "$dir/control" && eval "$(sed -n '/^ENV_FILE=/,/^ASSUME_YES=/p' vpn.sh)" && for f in lib/*.sh; do . "$f"; done
+    exit_reports_of) <"$dir/hub-status.json")
+  jq -e '.cz1.code == "abc123abc123abc123" and .cz1.via == "hub2"' <<<"$got" >/dev/null || fail "control's merge: $got"
+  rm -rf "$h"
+  echo "   an exit's report: through its tunnel to the hub, to control; no listing, no API"
+}
+
 # The route and protocol of a client, on a copy (the fixture's output is compared
 # between jq versions). Its subscription comes from the files of hub2, which lists
 # two hubs; nothing listens on its proxy, so the check after a switch only warns.
@@ -347,6 +384,7 @@ run() {
 # This host's jq, then each image as "jq" first in PATH
 run local ""
 routing_test "$WORK/local"
+exit_report_test "$WORK/local"
 for image in $JQ_IMAGES; do
   "$DOCKER" image inspect "$image" >/dev/null 2>&1 || "$DOCKER" pull -q "$image" >/dev/null
   v=$(tr -c 'a-z0-9.\n' '_' <<<"$image")

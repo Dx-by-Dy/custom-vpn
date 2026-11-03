@@ -27,6 +27,8 @@ services:
       - ./data/caddy:/caddy-data:ro,z
       # RU lists (hub); sing-box picks up refreshed files by itself
       - ./data/rule-sets:/rule-sets:ro,z
+      # what an exit says about itself (ROLE=exit); hubs read it through its tunnel
+      - ./data/status:/status:ro,z
 
   # TLS certificate for DOMAIN (used by hysteria too) + subscription on DOMAIN:SUB_PORT.
   # Only on hubs: vpn.sh sets COMPOSE_PROFILES to ROLE.

@@ -64,8 +64,11 @@ render_exit() {
   done < <(exit_ip_pairs)
   [[ -z $(exit_ip_pairs | awk '{print $1}' | sort | uniq -d) && -z $(exit_ips | sort | uniq -d) ]] ||
     die "EXIT_IPS: names and IPs must be unique"
-  mkdir -p "$OUT"
+  mkdir -p "$OUT" "$EXIT_STATUS_DIR"
   chmod 700 "$OUT"
+  chmod 755 "$EXIT_STATUS_DIR"
+  # sing-box would download a web UI if this weren't there; empty, so no listing either
+  [[ -f $EXIT_STATUS_DIR/index.html ]] || { : >"$EXIT_STATUS_DIR/index.html"; chmod 644 "$EXIT_STATUS_DIR/index.html"; }
   render_jq templates/exit.jq "$OUT/sing-box.json" sing-box --argjson hubs "$(hubs_json)" \
     --argjson ips "$(exit_ips | jq -Rn '[inputs]')" --argjson host_ips "$(host_ips_json)"
   check sing-box -v "$PWD/$OUT/sing-box.json:/c.json:ro,z" "$SINGBOX_IMAGE" check -c /c.json

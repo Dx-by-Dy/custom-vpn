@@ -105,11 +105,13 @@ scheme_json() {
   jq -n --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
     --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" --argjson hubs "$hubs" \
     --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" \
-    --argjson updates "$(conf_json "$UPDATES_FILE")" --argjson sites "$(conf_json "$SITES_FILE")" '
+    --argjson updates "$(conf_json "$UPDATES_FILE")" --argjson sites "$(conf_json "$SITES_FILE")" \
+    --arg stable "$(cat "$STABLE_FILE" 2>/dev/null || true)" '
     {users: $users, groups: $groups, routing: $routing, exits: $exits, hubs: $hubs,
      settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}
     + (if $sites != [] then {sites: $sites} else {} end)
-    + (if $updates != [] then {updates: $updates} else {} end)'
+    + (if $updates != [] then {updates: $updates} else {} end)
+    + (if $stable != "" then {stable: $stable} else {} end)'
 }
 
 # Is there something the hubs don't have yet?
@@ -162,7 +164,8 @@ cmd_control_diff() {
     cmp("exit"; by($o.exits); by($new.exits); ""),
     cmp("site"; by($o.sites // []); by($new.sites // []); .[0] | ": \(.[1])"),
     cmp("hub"; objs($o.hubs); objs($new.hubs); " (\(.domain))"),
-    cmp("update"; orders($o.updates); orders($new.updates); ": to \(.[2][:12])"),
+    cmp("update"; orders($o.updates); orders($new.updates); ": \(if .[4] == "back" then "back " else "" end)to \(.[2][:12])"),
+    (if ($o.stable // "") != ($new.stable // "") then "  stable ~ \(($o.stable // "-")[:12]) -> \(($new.stable // "-")[:12])" else empty end),
     ($new.settings | keys[] | select($o.settings[.] != $new.settings[.]) as $k |
       "  setting ~ \($k): \($o.settings[$k]) -> \($new.settings[$k])")'
 }
@@ -186,7 +189,7 @@ cmd_publish() {
   scheme=$(scheme_json "$hubs")
   jq --argjson version "$version" --arg created "$(date -u +%FT%TZ)" --arg update_key "$(control_update_key)" '
     {v: 1, version: $version, created: $created} + . + {update_key: $update_key}
-    | .hubs |= map(del(.recipient)) | del(.updates)' <<<"$scheme" |
+    | .hubs |= map(del(.recipient)) | del(.updates, .stable)' <<<"$scheme" |
     gzip -9 | age "${args[@]}" -o "$tmp/data"
   ssh-keygen -Y sign -q -f "$CONTROL_DIR/sign" -n "$SIG_NAMESPACE" "$tmp/data"
   mkdir -p "$OUT"
@@ -402,6 +405,8 @@ control_route_ip() {
 # minutes since an ISO time (UTC), or a big number
 mins_since() {
   local t
+  # (date takes an empty string for today's midnight)
+  [[ -n $1 ]] || { echo 999999; return; }
   t=$(date -d "$1" +%s 2>/dev/null) || { echo 999999; return; }
   echo $((($(date +%s) - t) / 60))
 }
@@ -410,7 +415,7 @@ mins_since() {
 # and every route on every hub; non-zero exit when something is wrong
 cmd_control_check() {
   load_env
-  local failed=0 version d zone ns v bad hubs name domain port recipient status code ordered at ver ago problems sub token nhubs links
+  local failed=0 version d zone ns v bad hubs name domain port recipient status code ordered at ver ago problems sub token nhubs links statuses=
   local -A routes_bad=() routes_ok=()
   report() { printf '%-12s %s\n' "$1" "$2"; [[ $2 == ok* ]] || failed=1; }
   version=$(cat "$CONTROL_DIR/version" 2>/dev/null || echo 0)
@@ -460,6 +465,7 @@ cmd_control_check() {
       report hub "FAIL: $name: no status at $domain:$port (down, blocked, or its code is older: ./vpn.sh hub update repo there)"
       continue
     fi
+    statuses+=$status$'\n'
     problems=()
     ver=$(jq -r '.snapshot.version // 0' <<<"$status")
     # a fresh snapshot takes up to 5 min + DNS_TTL
@@ -478,7 +484,8 @@ cmd_control_check() {
       if [[ $s == ok ]]; then routes_ok[$r]+="$name "; else routes_bad[$r]+="$name "; fi
     done < <(status_routes "$status")
     # the code control ordered (update FAIL lines came above); 15 min to get there
-    code=$(jq -r '.update.code // empty' <<<"$status")
+    code=$(jq -r '.update.code // .code // empty' <<<"$status")
+    ordered=
     read -r ordered at < <(conf_rows "$UPDATES_FILE" | awk -v n="$name" '$1 == "hub" && $2 == n {print $3, $4}') || true
     if [[ -n ${ordered:-} && $code != "$ordered" ]] && (($(date +%s) - at > 900)) &&
       ! jq -e '.update.result // "" | startswith("FAIL")' <<<"$status" >/dev/null; then
@@ -507,6 +514,7 @@ cmd_control_check() {
       report route "FAIL: $r: no hub has checked it yet"
     fi
   done
+  check_exit_reports "$(exit_reports_of <<<"$statuses")"
   return $failed
 }
 
@@ -644,10 +652,18 @@ apply_control_domains() {
   info "control's snapshots come from $new now"
 }
 
-# --- a managed hub's status, read by `control check` -------------------------
-# https://DOMAIN:SUB_PORT/<status token>/status.json: the snapshot applied, when
-# DNS was read, the last `check`. The token comes from the hub's age recipient,
-# which only this hub and control know; the file is served like the subscriptions.
+# --- status of hubs and exits, read by `control check` -------------------------
+# A managed hub: https://DOMAIN:SUB_PORT/<status token>/status.json: the snapshot
+# applied, when DNS was read, the last `check`, the code it runs. The token comes
+# from the hub's age recipient, which only this hub and control know; the file is
+# served like the subscriptions.
+# An exit has no public service to serve one, and control has no way to it. So it
+# keeps the same file in data/status/<token>/, the token from its REALITY public
+# key (hubs have it, their users don't), and hubs fetch it through the exit's own
+# tunnel: the exit serves it on localhost to whoever asks for EXIT_STATUS_HOST. A
+# hub keeps what it heard in its status.json (.exits), where control reads it.
+EXIT_STATUS_DIR=data/status
+EXIT_STATUS_HOST=status.cvpn.internal
 status_token() { printf 'cvpn-status\n%s' "$1" | sha256sum | cut -c1-32; }
 
 hub_status_token() {
@@ -655,22 +671,103 @@ hub_status_token() {
   status_token "$(age-keygen -y "$CONTROL_DIR/age.key")"
 }
 
-# hub_status KEY JSON: set .KEY of this hub's status.json
-hub_status() {
-  local token dir
-  managed && token=$(hub_status_token) || return 0
-  dir=$OUT/sub/$token
+# This server's status.json, or nothing if it keeps none
+status_file() {
+  local token
+  if [[ $ROLE == exit ]]; then
+    [[ -n ${REALITY_PUBLIC_KEY:-} ]] && echo "$EXIT_STATUS_DIR/$(status_token "$REALITY_PUBLIC_KEY")/status.json"
+  else
+    managed && token=$(hub_status_token) && echo "$OUT/sub/$token/status.json"
+  fi
+}
+
+# server_status KEY JSON: set .KEY of this server's status.json
+server_status() {
+  local file dir
+  file=$(status_file) || return 0
+  [[ -n $file ]] || return 0
+  dir=${file%/*}
   mkdir -p "$dir"
-  { [[ -s $dir/status.json ]] && cat "$dir/status.json" || echo '{}'; } |
-    jq -c --arg k "$1" --argjson val "$2" --arg hub "$HUB_NAME" '. + {v: 1, hub: $hub} + {($k): $val}' >"$dir/status.json.tmp"
-  chmod 644 "$dir/status.json.tmp"
-  mv "$dir/status.json.tmp" "$dir/status.json"
+  chmod 755 "$dir"
+  { [[ -s $file ]] && cat "$file" || echo '{}'; } |
+    jq -c --arg k "$1" --argjson val "$2" --arg role "$ROLE" --arg who "${HUB_NAME:-${EXIT_NAME:-}}" \
+      '. + {v: 1, ($role): $who} + {($k): $val}' >"$file.tmp"
+  chmod 644 "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+# What each exit says about itself, through its tunnel, into this hub's status.
+# An exit that doesn't answer keeps its last report, with the time it was heard.
+hub_exit_reports() {
+  managed || return 0
+  local file exits='{}' now e pbk routes r json
+  file=$(status_file) || return 0
+  [[ -s $file ]] && exits=$(jq -c '.exits // {}' "$file")
+  now=$(date -u +%FT%TZ)
+  while read -r e pbk routes; do
+    for r in ${routes//,/ }; do
+      json=$(curl -fsS -m 8 --max-filesize 65536 --noproxy '' --socks5-hostname "127.0.0.1:$CHECK_PORT" \
+        --proxy-user "check@$r:$CHECK_TOKEN" "http://$EXIT_STATUS_HOST/ui/$(status_token "$pbk")/status.json" 2>/dev/null |
+        jq -ce 'select(.v == 1)' 2>/dev/null) || continue
+      exits=$(jq -c --arg e "$e" --argjson j "$json" --arg now "$now" '.[$e] = ($j + {seen: $now})' <<<"$exits")
+      break
+    done
+  done < <(exit_routes_json | jq -r 'group_by(.name | split("/")[0])[] |
+    "\(.[0].name | split("/")[0]) \(.[0].public_key) \(map(.name) | join(","))"')
+  # exits that are gone from the scheme
+  exits=$(jq -c --argjson names "$(exit_routes_json | jq -c 'map(.name | split("/")[0]) | unique')" \
+    'with_entries(select(.key as $k | $names | index($k)))' <<<"$exits")
+  server_status exits "$exits"
+}
+
+# {exit: its freshest report, with the hub that heard it (via)} from hubs' status.json on stdin
+exit_reports_of() {
+  jq -cs '[.[] | select(type == "object" and .v == 1) | .hub as $h | (.exits // {}) | to_entries[] | .value + {name: .key, via: $h}]
+    | group_by(.name) | map({key: .[0].name, value: max_by(.seen)}) | from_entries'
+}
+
+# The hubs' status.json, one per line (those that answer)
+control_hub_statuses() {
+  local domain port recipient
+  while read -r domain port recipient; do
+    hub_status_get "$domain" "$port" "$recipient" | jq -c 'select(type == "object" and .v == 1)' 2>/dev/null || true
+  done < <(control_hubs_json | jq -r '.[] | "\(.domain) \(.sub_port) \(.recipient)"')
+}
+
+# control check: what each exit said, heard through the hubs; uses report
+check_exit_reports() {
+  local reports=$1 name rep problems ago code ordered at
+  while read -r name; do
+    rep=$(jq -c --arg n "$name" '.[$n] // empty' <<<"$reports")
+    if [[ -z $rep ]]; then
+      report exit "FAIL: $name: no hub has a report from it (down, or its code or the hubs' is older)"
+      continue
+    fi
+    problems=()
+    ago=$(mins_since "$(jq -r '.seen // empty' <<<"$rep")")
+    ((ago <= 30)) || problems+=("last heard ${ago} min ago")
+    ago=$(mins_since "$(jq -r '.check.at // empty' <<<"$rep")")
+    ((ago <= 120)) || problems+=("no check for ${ago} min")
+    while read -r line; do problems+=("$line"); done < <(jq -r '.check.lines[]? | select(test("^\\S+ +FAIL"))' <<<"$rep")
+    code=$(jq -r '.update.code // .code // empty' <<<"$rep")
+    read -r ordered at < <(conf_rows "$UPDATES_FILE" | awk -v n="$name" '$1 == "exit" && $2 == n {print $3, $4}') || true
+    if [[ -n ${ordered:-} && $code != "$ordered" ]] && (($(date +%s) - at > 900)) &&
+      ! jq -e '.update.result // "" | startswith("FAIL")' <<<"$rep" >/dev/null; then
+      problems+=("ordered ${ordered:0:12}, runs ${code:-an older version}")
+    fi
+    ordered=
+    if ((${#problems[@]})); then
+      report exit "FAIL: $name: $(printf '%s; ' "${problems[@]}" | sed 's/; $//')"
+    else
+      report exit "ok ($name: code ${code:0:7}, sing-box $(jq -r '.sing_box // "?"' <<<"$rep"), heard by $(jq -r .via <<<"$rep") $(mins_since "$(jq -r .seen <<<"$rep")") min ago)"
+    fi
+  done < <(conf_rows "$EXITS_FILE" | awk '{print $1}')
 }
 
 # The snapshot this hub has applied, into its status
 hub_status_snapshot() {
   [[ -f $CONTROL_DIR/version ]] || return 0
-  hub_status snapshot "$(jq -cn --argjson v "$(cat "$CONTROL_DIR/version")" \
+  server_status snapshot "$(jq -cn --argjson v "$(cat "$CONTROL_DIR/version")" \
     --arg at "$(date -u -r "$CONTROL_DIR/version" +%FT%TZ)" '{version: $v, applied: $at}')"
 }
 

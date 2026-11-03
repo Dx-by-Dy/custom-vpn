@@ -227,19 +227,21 @@ cmd_sync() {
         continue
       fi
       touch "$SYNCED_FILE"
-      hub_status synced "\"$(date -u +%FT%TZ)\""
+      server_status synced "\"$(date -u +%FT%TZ)\""
       state_apply - <<<"$line"
       update_sync
+      hub_exit_reports || true
       return
     done
   done
   $answered || die "can't read head.{$(control_domains_line | tr ' ' ,)} through any of: ${CONTROL_RESOLVERS:-$DNS_RESOLVERS_DEFAULT}"
   ((newest <= applied)) || die "v$newest is in DNS, but no resolver gave all its pieces"
   touch "$SYNCED_FILE"
-  hub_status synced "\"$(date -u +%FT%TZ)\""
+  server_status synced "\"$(date -u +%FT%TZ)\""
   hub_status_snapshot
   info "up to date: v$applied"
   update_sync
+  hub_exit_reports || true
 }
 
 install_sync_timer() {
