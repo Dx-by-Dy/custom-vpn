@@ -101,11 +101,12 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                   hub    add NAME TOKEN | token NAME | del NAME | list
                   hub|exit update [NAME|--all [COMMIT|-]]   (код на хабах / exit'ах, после publish)
                   route  list | ip [ROUTE]
+                  site   hub DOMAIN... | route DOMAIN... | del DOMAIN... | list   (исключения из RU)
                   diff | publish | check | dns | import FILE | prune
 
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
-                  user …, group …, exit …, route list|ip   (как в control; под control — только просмотр)
+                  user …, group …, exit …, site …, route list|ip   (как в control; под control — только просмотр)
                   update repo [COMMIT]|images|rules | firewall [--dry-run] | tune | install-docker | uninstall
 
 ./vpn.sh exit     deploy | init | up | down | logs | check | prune | render
