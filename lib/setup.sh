@@ -19,8 +19,9 @@ migrate_env() {
 }
 
 cmd_init() {
-  # ROLE=client CLIENT_SUB=LINK [CLIENT_LISTEN=...] ./vpn.sh deploy
+  # ROLE=client CLIENT_SUB=LINK [CLIENT_LISTEN=... CLIENT_ROUTE=... CLIENT_PROTOCOL=...] ./vpn.sh deploy
   local want=${ROLE:-} want_sub=${CLIENT_SUB:-} want_listen=${CLIENT_LISTEN:-}
+  local want_route=${CLIENT_ROUTE:-} want_protocol=${CLIENT_PROTOCOL:-}
   if [[ $(env_role) == control ]]; then
     control_init
     return
@@ -47,6 +48,8 @@ cmd_init() {
       set_var CLIENT_LISTEN "$want_listen"
       load_env
     fi
+    [[ -z $want_route ]] || set_var CLIENT_ROUTE "$want_route"
+    [[ -z $want_protocol ]] || set_var CLIENT_PROTOCOL "$want_protocol"
     [[ -n ${CLIENT_SUB:-} ]] || die "set CLIENT_SUB in $ENV_FILE: the subscription link of this client's user"
     info "client of $(client_subs | paste -sd' '), proxy on $CLIENT_LISTEN_HOST:$CLIENT_LISTEN_PORT"
     return

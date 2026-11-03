@@ -126,6 +126,9 @@ EOF
   show "client" <<'EOF'
 Client: a local proxy (socks5 + http on CLIENT_LISTEN) through the hubs of CLIENT_SUB.
   CLIENT_SUB=LINK ./vpn.sh client deploy    full setup (LINK: the user's subscription)
+  ./vpn.sh client route [ROUTE|-]           the user's routes, or go on to one (- : the main one)
+  ./vpn.sh client protocol [auto|reality|hy2]
+                                            how to reach the hubs: the fastest on either, or one
   ./vpn.sh client refresh                   take the subscription again (hourly by the timer)
 
 EOF
@@ -211,7 +214,7 @@ if [[ " hub exit client control " == *" $cmd "* ]]; then
   fi
 fi
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | site | control | state | sync | publish | import) lock ;;
+  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | protocol | site | control | state | sync | publish | import) lock ;;
 esac
 # Control is a laptop: nothing to run or check there
 case $(env_role) in
@@ -223,7 +226,7 @@ case $(env_role) in
     ;;
   client)
     case $cmd in
-      deploy | init | up | down | logs | tune | install-docker | uninstall | firewall | render | check | prune | refresh | update | help | -h | --help) ;;
+      deploy | init | up | down | logs | tune | install-docker | uninstall | firewall | render | check | prune | refresh | update | route | protocol | help | -h | --help) ;;
       *) die "./vpn.sh $cmd isn't for ROLE=client (./vpn.sh help)" ;;
     esac
     ;;
@@ -244,6 +247,7 @@ case $cmd in
   group) cmd_group "$@" ;;
   route) cmd_route "$@" ;;
   site) cmd_site "$@" ;;
+  protocol) cmd_protocol "$@" ;;
   control) cmd_control "$@" ;;
   state) cmd_state "$@" ;;
   sync) cmd_sync ;;

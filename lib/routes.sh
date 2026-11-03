@@ -447,6 +447,11 @@ cmd_group() {
 
 cmd_route() {
   local where
+  if [[ $(env_role) == client ]]; then
+    load_env
+    client_route "$@"
+    return
+  fi
   require_role "hub control" route
   case ${1:-list} in
     list)

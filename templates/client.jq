@@ -1,5 +1,8 @@
 # sing-box config of ROLE=client: a local proxy through the hubs of the subscription.
-# Inputs: $sub[0] = {outbounds: [vless / hysteria2 of every hub]}, $test_url (RU: answered by the hub)
+# Inputs: $sub[0] = {outbounds: [vless / hysteria2 of every hub]}, $test_url (RU: answered by the hub),
+#   $protocol = auto (the fastest of all), reality or hy2 (the fastest hub on it)
+def chosen: $sub[0].outbounds | map(select($protocol == "auto"
+  or (.type == "vless" and $protocol == "reality") or (.type == "hysteria2" and $protocol == "hy2")));
 {
   log: {level: "warn"},
   dns: {servers: [{type: "local", tag: "local"}]},
@@ -12,10 +15,10 @@
   outbounds: ([{
     type: "urltest",
     tag: "auto",
-    outbounds: [$sub[0].outbounds[].tag],
+    outbounds: [chosen[].tag],
     url: $test_url,
     interval: "3m"
-  }] + $sub[0].outbounds + [{type: "direct", tag: "direct"}]),
+  }] + chosen + [{type: "direct", tag: "direct"}]),
   route: {
     default_domain_resolver: "local",
     rules: [{ip_is_private: true, outbound: "direct"}],

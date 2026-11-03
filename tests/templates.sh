@@ -221,11 +221,62 @@ routing_test() {
   echo "   the hub's rules: connections leave where they should"
 }
 
+# The route and protocol of a client, on a copy (the fixture's output is compared
+# between jq versions). Its subscription comes from the files of hub2, which lists
+# two hubs; nothing listens on its proxy, so the check after a switch only warns.
+client_test() {
+  local name=$1 bin=$2 dir=$3 c=$3/client-t sub=$3/hub2/generated/sub cfg got bad
+  cp -a "$dir/client" "$c"
+  cfg=$c/generated/sing-box.json
+  setenv "$c/.env" CLIENT_LISTEN 127.0.0.1:9
+  setenv "$c/.env" CLIENT_SUB "file://$sub/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1/sub"
+  # what auto|reality|hy2 leaves in the config: "type type ...", and urltest uses just them
+  outbounds() { jq -r '[.outbounds[] | select(.type == "vless" or .type == "hysteria2") | .type] | sort | join(" ")' "$cfg"; }
+  vpn "$c" "$bin" client up >/dev/null 2>&1 || fail "$name: client up"
+  [[ $(outbounds) == "hysteria2 hysteria2 vless vless" ]] || fail "$name: auto: $(outbounds)"
+  vpn "$c" "$bin" client protocol hy2 >"$dir/ct.log" 2>&1 || { cat "$dir/ct.log"; fail "$name: client protocol hy2"; }
+  grep -q 'nothing goes through' "$dir/ct.log" || fail "$name: no warning about a dead proxy: $(cat "$dir/ct.log")"
+  [[ $(outbounds) == "hysteria2 hysteria2" ]] || fail "$name: hy2: $(outbounds)"
+  jq -e '(.outbounds[] | select(.tag == "auto") | .outbounds | length) == 2' "$cfg" >/dev/null || fail "$name: hy2: urltest isn't over the hubs"
+  vpn "$c" "$bin" client protocol reality >/dev/null 2>&1 || fail "$name: client protocol reality"
+  [[ $(outbounds) == "vless vless" ]] || fail "$name: reality: $(outbounds)"
+  grep -q '^Protocol: reality$' <<<"$(vpn "$c" "$bin" client protocol)" || fail "$name: client protocol shows"
+  if vpn "$c" "$bin" client protocol wireguard >/dev/null 2>&1; then fail "$name: took protocol wireguard"; fi
+  grep -q '^CLIENT_PROTOCOL=reality$' "$c/.env" || fail "$name: a bad protocol changed .env"
+  vpn "$c" "$bin" client protocol auto >/dev/null 2>&1 || fail "$name: client protocol auto"
+  [[ $(outbounds) == "hysteria2 hysteria2 vless vless" ]] || fail "$name: back to auto: $(outbounds)"
+  # routes: alice has cz1/ip1 (the main one) and local, each with its key
+  got=$(vpn "$c" "$bin" client route) || fail "$name: client route"
+  grep -q '^\* cz1/ip1 (the main one)$' <<<"$got" && grep -q '^  local$' <<<"$got" || fail "$name: client route shows: $got"
+  vpn "$c" "$bin" client route local >/dev/null 2>&1 || fail "$name: client route local"
+  [[ $(jq -r .route "$c/data/client/sub.json") == local ]] && grep -q '^CLIENT_ROUTE=local$' "$c/.env" || fail "$name: not on route local"
+  got=$(jq -r '.outbounds[] | select(.type == "vless") | .uuid' "$cfg" | sort -u)
+  [[ $got != 11111111-1111-4111-8111-111111111111 ]] || fail "$name: route local with the key of the main route"
+  # a route the user doesn't have changes nothing
+  for bad in cz1/ip1+ru none nope '../x' 'a b'; do
+    if vpn "$c" "$bin" client route "$bad" >/dev/null 2>&1; then fail "$name: took route '$bad'"; fi
+    [[ $(jq -r .route "$c/data/client/sub.json") == local ]] && grep -q '^CLIENT_ROUTE=local$' "$c/.env" || fail "$name: route '$bad' changed something"
+  done
+  # no hub answers: the copy works if it's of the route asked for, and only then
+  setenv "$c/.env" CLIENT_SUB http://127.0.0.1:9/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1/sub
+  vpn "$c" "$bin" client render >/dev/null 2>&1 || fail "$name: render on the copy of the same route"
+  setenv "$c/.env" CLIENT_ROUTE cz1/ip1
+  if vpn "$c" "$bin" client render >/dev/null 2>&1; then fail "$name: rendered the copy of another route"; fi
+  setenv "$c/.env" CLIENT_SUB "file://$sub/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1/sub"
+  vpn "$c" "$bin" client route - >/dev/null 2>&1 || fail "$name: client route -"
+  grep -q '^CLIENT_ROUTE=$' "$c/.env" && [[ $(jq -r .route "$c/data/client/sub.json") == cz1/ip1 ]] || fail "$name: not back on the main route"
+  # +ru by its name, though its path differs (carol)
+  setenv "$c/.env" CLIENT_SUB "file://$sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/sub"
+  vpn "$c" "$bin" client route cz1/ip1+ru >/dev/null 2>&1 || fail "$name: client route cz1/ip1+ru"
+  [[ $(jq -r .route "$c/data/client/sub.json") == cz1/ip1+ru ]] || fail "$name: not on route cz1/ip1+ru"
+  rm -rf "$c"
+}
+
 # The CLI of exceptions in control; leaves the scheme as it was
 site_test() {
   local name=$1 bin=$2 dir=$3 bad
   vpn "$dir/control" "$bin" control site route new.example.org >/dev/null 2>&1 || fail "$name: site route"
-  vpn "$dir/control" "$bin" control diff 2>&1 | grep -q '^  site + new.example.org: route$' || fail "$name: diff doesn't show the new site"
+  grep -q '^  site + new.example.org: route$' <<<"$(vpn "$dir/control" "$bin" control diff 2>&1)" || fail "$name: diff doesn't show the new site"
   # a name and its subdomains go one way, both ways round
   if vpn "$dir/control" "$bin" control site hub sub.new.example.org >/dev/null 2>&1; then fail "$name: a subdomain went into the other list"; fi
   if vpn "$dir/control" "$bin" control site hub example.org >/dev/null 2>&1; then fail "$name: a parent went into the other list"; fi
@@ -238,7 +289,7 @@ site_test() {
   for bad in 'https://example.org/' '*.example.org' 'example.org:443' 1.2.3.4 com 'пример.рф' '-a.example.org' 'a b.org'; do
     if vpn "$dir/control" "$bin" control site route "$bad" >/dev/null 2>&1; then fail "$name: site route took '$bad'"; fi
   done
-  vpn "$dir/control" "$bin" control site list | grep -q '^keep.example.com ' || fail "$name: site list"
+  grep -q '^keep.example.com ' <<<"$(vpn "$dir/control" "$bin" control site list)" || fail "$name: site list"
   # routes: +ru only of exits that exist, as the list of the user
   for bad in local+ru none+ru cz1/nope+ru cz1/ip1+all; do
     if vpn "$dir/control" "$bin" control user route carol "$bad" >/dev/null 2>&1; then fail "$name: route '$bad' accepted"; fi
@@ -287,7 +338,8 @@ run() {
   jq -e '[.. | .domain_suffix? // empty | arrays | .[]] | index("keep.example.com") and index("blocked.example.ru")' \
     "$dir/hub2/generated/sing-box.json" >/dev/null || fail "$name: the exceptions aren't in hub2's config"
   if vpn "$dir/hub2" "$bin" hub site route x.example.org >/dev/null 2>&1; then fail "$name: a managed hub changed its exceptions"; fi
-  vpn "$dir/hub2" "$bin" hub site list | grep -q '^keep.example.com ' || fail "$name: site list on a managed hub"
+  grep -q '^keep.example.com ' <<<"$(vpn "$dir/hub2" "$bin" hub site list)" || fail "$name: site list on a managed hub"
+  client_test "$name" "$bin" "$dir"
   (cd "$dir" && find hub/generated exit/generated client/generated hub2/generated hub2/users.conf hub2/exits.conf \
     hub2/groups.conf hub2/routing.conf hub2/sites.conf -type f ! -name '*.tmp' ! -name status.json | sort | xargs sha256sum) >"$WORK/$name.sums"
 }

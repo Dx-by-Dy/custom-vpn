@@ -104,6 +104,8 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                   site   hub DOMAIN... | route DOMAIN... | del DOMAIN... | list   (исключения из RU)
                   diff | publish | check | dns | import FILE | prune
 
+./vpn.sh client   deploy | up | check | refresh | route [ROUTE|-] | protocol [auto|reality|hy2]
+
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
                   user …, group …, exit …, site …, route list|ip   (как в control; под control — только просмотр)

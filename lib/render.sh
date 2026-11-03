@@ -117,10 +117,11 @@ sub_links() {
     "hysteria2://\($hy)@\(.domain):\(.hysteria_port)/?sni=\(.domain)#\($label + "-hy2" | @uri)"' <<<"$SUB_HUBS"
 }
 
-# sub_outbounds UUID HY_USER HY_PASS [LABEL]: the same as sing-box outbounds (for ROLE=client)
+# sub_outbounds UUID HY_USER HY_PASS LABEL ROUTE ROUTES_JSON: the same as sing-box
+# outbounds (for ROLE=client), with the route they lead to and all of the user's
 sub_outbounds() {
-  jq --arg uuid "$1" --arg hy "$2:$3" --arg sub "${4:-$SUB_NAME}" '
-    {v: 1, name: $sub, outbounds: [.[] | {
+  jq --arg uuid "$1" --arg hy "$2:$3" --arg sub "$4" --arg route "$5" --argjson routes "$6" '
+    {v: 1, name: $sub, route: $route, routes: $routes, outbounds: [.[] | {
       type: "vless",
       tag: (.name + "-reality"),
       server: .domain,
@@ -176,7 +177,7 @@ cmd_render() {
   # Per user: a subscription of every route (every hub, /<token>/<route>/sub and
   # sing-box.json), the first route also at /<token>/sub, and the import page;
   # drop pages of removed users and routes
-  local name uuid hy_user hy_pass token exp tokens=" " r i slug label keep links obs list=() cred=() dir
+  local name uuid hy_user hy_pass token exp tokens=" " r i slug label keep links obs routes_json list=() cred=() dir
   local -A routes=()
   while read -r name r; do routes[$name]=$r; done < <(user_route_lines)
   SUB_HUBS=$(sub_hubs_json)
@@ -184,6 +185,7 @@ cmd_render() {
     IFS=, read -ra list <<<"${routes[$name]:-none}"
     user_vars "$uuid" "$hy_user" "$hy_pass" "$token"
     mkdir -p "$OUT/sub/$token"
+    routes_json=$(printf '%s\n' "${list[@]}" | jq -Rn '[inputs]')
     SUB_BODY=$(sub_page_body "$token" "${list[@]}")
     render_file templates/sub.html "$OUT/sub/$token/index.html"
     keep=" "
@@ -193,7 +195,7 @@ cmd_render() {
       label=$SUB_NAME
       ((${#list[@]} == 1)) || label="$SUB_NAME $r"
       links=$(sub_links "${cred[@]}" "$label" | base64 -w0)
-      obs=$(sub_outbounds "${cred[@]}" "$label")
+      obs=$(sub_outbounds "${cred[@]}" "$label" "$r" "$routes_json")
       if ((i == 0)); then
         write_file "$OUT/sub/$token/sub" "$links"
         write_file "$OUT/sub/$token/sing-box.json" "$obs"
