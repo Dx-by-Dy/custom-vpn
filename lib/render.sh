@@ -62,9 +62,17 @@ sub_page_buttons() {
 EOF
 }
 
+# What a route does with Russian sites, where it isn't the usual, for people
+route_note() {
+  case $1 in
+    local) echo "всё с российского адреса, и зарубежные сайты тоже" ;;
+    *+ru) echo "всё через зарубежный выход, и российские сайты тоже" ;;
+  esac
+}
+
 # sub_page_body TOKEN ROUTE...: the import page: one subscription, or one per route
 sub_page_body() {
-  local token=$1 r first=true
+  local token=$1 r note first=true
   shift
   if (($# == 1)); then
     echo '  <p>Нажми на свое приложение — подписка добавится сама.</p>'
@@ -73,7 +81,9 @@ sub_page_body() {
   fi
   echo '  <p>Каждый выход — отдельная подписка: добавь нужные и переключайся между ними в приложении.</p>'
   for r in "$@"; do
-    if $first; then echo "  <h2>$r <span>основной</span></h2>"; else echo "  <h2>$r</h2>"; fi
+    note=$(route_note "$r")
+    if $first; then note="основной${note:+, $note}"; fi
+    echo "  <h2>$r${note:+ <span>$note</span>}</h2>"
     first=false
     sub_page_buttons "https://$DOMAIN:$SUB_PORT/$token/$(route_slug "$r")/sub" "$SUB_NAME · $r"
   done
@@ -158,7 +168,8 @@ cmd_render() {
   chmod 700 "$OUT"
   render_jq templates/hub.jq "$OUT/sing-box.json" sing-box \
     --argjson users "$(users_json)" --argjson routes "$(exit_routes_json)" \
-    --argjson rule_sets "$(rule_sets_json)" --argjson host_ips "$(host_ips_json)" --argjson hy2 "$HY2"
+    --argjson rule_sets "$(rule_sets_json)" --argjson host_ips "$(host_ips_json)" --argjson hy2 "$HY2" \
+    --argjson sites "$(sites_json)"
   SUB_ROUTE_HEADERS=$(sub_route_headers)
   render_file templates/Caddyfile "$OUT/Caddyfile" caddy
 

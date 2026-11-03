@@ -10,3 +10,4 @@ backups/
 exits.conf
 groups.conf
 routing.conf
+sites.conf

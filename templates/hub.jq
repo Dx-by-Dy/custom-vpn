@@ -8,11 +8,19 @@
 #   $rule_sets  RU lists in /rule-sets that are there: geosite-ru, geoip-ru
 #   $host_ips   this host's own addresses (/32, /128)
 #   $hy2        false until caddy has the certificate (VLESS works without it)
-# RU leaves from the hub for everyone; everything else through the user's route,
-# and nowhere if it has none.
+#   $sites      exceptions by name: {hub: [domains that count as RU],
+#               route: [domains that don't, whatever the lists say]}
+# RU leaves from the hub; everything else through the user's route, and nowhere
+# if it has none. A key of a route "EXIT/IP+ru" sends everything through the
+# exit, RU and the exceptions too.
 
 # RU: by name, and by IP for connections made to an IP
-def ru: {domain_suffix: ["ru", "su", "xn--p1ai"]} + if $rule_sets == [] then {} else {rule_set: $rule_sets} end;
+def ru_lists: {domain_suffix: (["ru", "su", "xn--p1ai"] + $sites.hub)} + if $rule_sets == [] then {} else {rule_set: $rule_sets} end;
+def ru: if $sites.route == [] then ru_lists else
+  {type: "logical", mode: "and", rules: [{domain_suffix: $sites.route, invert: true}, ru_lists]} end;
+# Addresses nobody may reach through this hub
+def guard: [{ip_is_private: true, action: "reject"}]
+  + if $host_ips == [] then [] else [{ip_cidr: $host_ips, action: "reject"}] end;
 # Who uses route R: its users and the `check` user of the route
 def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
 {
@@ -59,7 +67,7 @@ def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
       tag: "check-in",
       listen: "127.0.0.1",
       listen_port: ($ENV.CHECK_PORT | tonumber),
-      users: [("local", "none", $routes[].name) | {username: "check@\(.)", password: $ENV.CHECK_TOKEN}]
+      users: [("local", "none", $routes[].name, ($routes[].name + "+ru")) | {username: "check@\(.)", password: $ENV.CHECK_TOKEN}]
     }
   ]),
   outbounds: ([{type: "direct", tag: "local"}] + [$routes[] | {
@@ -82,15 +90,17 @@ def members($r): [$users[] | select(.route == $r) | .name] + ["check@\($r)"];
     rule_set: [$rule_sets[] | {type: "local", tag: ., format: "binary", path: "/rule-sets/\(.).srs"}],
     rules: ([
       {action: "sniff"},
-      {protocol: "bittorrent", action: "reject"},
-      # What leaves from here is resolved here, so names that point at private
-      # networks or at this host (localtest.me -> 127.0.0.1) are blocked too.
-      # Traffic to exits keeps the name: after a resolve sing-box would send them
-      # the IP, picked by DNS from here; they resolve it themselves.
-      {type: "logical", mode: "or", rules: [ru, {auth_user: members("local")}], action: "resolve"},
-      {ip_is_private: true, action: "reject"}
+      {protocol: "bittorrent", action: "reject"}
     ]
-    + if $host_ips == [] then [] else [{ip_cidr: $host_ips, action: "reject"}] end
+    + guard
+    # Everything through the exit: before anything can count as RU
+    + [$routes[].name as $r | {auth_user: members("\($r)+ru"), outbound: $r}]
+    # What leaves from here is resolved here, so names that point at private
+    # networks or at this host (localtest.me -> 127.0.0.1) are blocked too.
+    # Traffic to exits keeps the name: after a resolve sing-box would send them
+    # the IP, picked by DNS from here; they resolve it themselves.
+    + [{type: "logical", mode: "or", rules: [ru, {auth_user: members("local")}], action: "resolve"}]
+    + guard
     + [ru + {outbound: "local"}]
     + [("local", $routes[].name) as $r | {auth_user: members($r), outbound: $r}]
     # Route none, routes that don't exist: nothing leaves

@@ -11,7 +11,7 @@ DEFAULT_GRACE_HOURS=24
 DEFAULT_REPO_URL=https://github.com/Dx-by-Dy/custom-vpn.git
 DEFAULT_REPO_BRANCH=main
 # Settings and lists that are this server's state: backed up by `update repo`
-CONF_FILES=(.env users.conf hubs.conf exits.conf groups.conf routing.conf)
+CONF_FILES=(.env users.conf hubs.conf exits.conf groups.conf routing.conf sites.conf)
 # Files and directories that hold this server's state; never taken from the repo
 STATE_PATHS=("${CONF_FILES[@]}" data generated)
 # What `check` asks for the public IP a route leaves from: foreign sites and .ru
@@ -62,10 +62,15 @@ within minutes.
   ./vpn.sh control exit list
   ./vpn.sh control exit token NAME          the command that makes the exit follow control's
                                             code updates (once, on the exit)
-  ./vpn.sh control route list               who leaves through which routes
-                                            (local, none = RU only, EXIT/IPNAME)
+  ./vpn.sh control route list               who leaves through which routes (local,
+                                            none = RU only, EXIT/IPNAME, EXIT/IPNAME+ru = RU
+                                            through the exit too)
   ./vpn.sh control route ip [ROUTE]         the IP each route leaves from, on every hub
                                             (their last check)
+  ./vpn.sh control site hub DOMAIN...       always from the hub, like RU (subdomains too)
+  ./vpn.sh control site route DOMAIN...     never RU: by the route of the user
+  ./vpn.sh control site del DOMAIN...       the RU lists decide again
+  ./vpn.sh control site list
   ./vpn.sh control hub add NAME TOKEN       a hub from `./vpn.sh hub control join` there;
                                             prints the token for `hub control set`
   ./vpn.sh control hub token NAME           print that token again
@@ -100,7 +105,8 @@ Hub: people connect here.
   ./vpn.sh hub user add|del|list|route|group|links|rotate ...
   ./vpn.sh hub group add|route|del|list ...
   ./vpn.sh hub exit add|del|list ...
- Under control these only show: user list, user links, group list, exit list, route list|ip
+  ./vpn.sh hub site hub|route|del|list ...
+ Under control these only show: user list, user links, group list, exit list, site list, route list|ip
   ./vpn.sh hub route list                   who leaves through which route
   ./vpn.sh hub route ip [ROUTE]             the IP each route leaves from, right now
 
@@ -205,13 +211,13 @@ if [[ " hub exit client control " == *" $cmd "* ]]; then
   fi
 fi
 case $cmd in
-  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | control | state | sync | publish | import) lock ;;
+  deploy | init | up | render | user | rotate | prune | refresh | update | firewall | uninstall | hub | exit | group | route | site | control | state | sync | publish | import) lock ;;
 esac
 # Control is a laptop: nothing to run or check there
 case $(env_role) in
   control)
     case $cmd in
-      init | user | links | rotate | prune | exit | group | route | hub | publish | diff | import | up | check | dns | help | -h | --help) ;;
+      init | user | links | rotate | prune | exit | group | route | site | hub | publish | diff | import | up | check | dns | help | -h | --help) ;;
       *) die "./vpn.sh $cmd isn't for ROLE=control (./vpn.sh help)" ;;
     esac
     ;;
@@ -237,6 +243,7 @@ case $cmd in
   exit) cmd_exit "$@" ;;
   group) cmd_group "$@" ;;
   route) cmd_route "$@" ;;
+  site) cmd_site "$@" ;;
   control) cmd_control "$@" ;;
   state) cmd_state "$@" ;;
   sync) cmd_sync ;;

@@ -11,6 +11,7 @@
 # Roles: a stand-alone hub (users, a rotated credential, a group, routes via an
 # exit, users with several routes, hysteria with a certificate), an exit, a client, and control publishing
 # a snapshot that a second hub applies (its subscription then lists two hubs).
+# The hub's real rules also run in sing-box, to see where each connection leaves.
 # Needs docker or podman (DOCKER=podman), the sing-box and caddy images of
 # .env.example, age, ssh-keygen and openssl. No network: everything is local.
 set -euo pipefail
@@ -24,7 +25,8 @@ for c in "$DOCKER" jq age age-keygen ssh-keygen openssl; do
 done
 
 WORK=$(mktemp -d)
-trap 'if [[ -n ${KEEP:-} ]]; then echo "kept $WORK"; else rm -rf "$WORK"; fi' EXIT
+SB_NAME=cvpn-test-$$
+trap '"$DOCKER" rm -f "$SB_NAME" >/dev/null 2>&1 || true; if [[ -n ${KEEP:-} ]]; then echo "kept $WORK"; else rm -rf "$WORK"; fi' EXIT
 mkdir -p "$WORK/bin" "$WORK/tmp"
 export TMPDIR=$WORK/tmp
 SINGBOX_IMAGE=$(sed -n 's/^SINGBOX_IMAGE=//p' .env.example)
@@ -53,7 +55,7 @@ mkdir -p "$BASE"
 
 # Minimal RU lists, compiled by sing-box itself
 mkdir -p "$BASE/rule-sets"
-echo '{"version": 3, "rules": [{"domain_suffix": ["ru", "su"]}]}' >"$BASE/rule-sets/geosite-ru.json"
+echo '{"version": 3, "rules": [{"domain_suffix": ["ru", "su", "listed.example.com"]}]}' >"$BASE/rule-sets/geosite-ru.json"
 echo '{"version": 3, "rules": [{"ip_cidr": ["5.8.0.0/16"]}]}' >"$BASE/rule-sets/geoip-ru.json"
 for t in geosite-ru geoip-ru; do
   "$DOCKER" run --rm -v "$BASE/rule-sets:/r:z" "$SINGBOX_IMAGE" rule-set compile -o "/r/$t.srs" "/r/$t.json"
@@ -103,12 +105,15 @@ printf '%s\n' "$USERS" >"$BASE/hub/users.conf"
 printf '# exit  token\ncz1 %s\n' "$EXIT_TOKEN" >"$BASE/hub/exits.conf"
 # several routes: alice from her group, carol her own (the first is the main one)
 printf '# group  route\nsales cz1/ip1,local\n' >"$BASE/hub/groups.conf"
-printf '# user  group  route\nalice sales -\nbob - none\ncarol - none,cz1/ip1\n' >"$BASE/hub/routing.conf"
+# carol also has the route that sends RU through the exit
+printf '# user  group  route\nalice sales -\nbob - none\ncarol - none,cz1/ip1,cz1/ip1+ru\n' >"$BASE/hub/routing.conf"
+# Exceptions: a foreign name that goes from the hub, RU ones that go by the route
+printf '# domain  hub|route\nkeep.example.com hub\nblocked.example.ru route\nlisted.example.com route\n' >"$BASE/hub/sites.conf"
 
 # Control with the same scheme, a fake second hub and a real one (hub2)
 fixture "$BASE/control" control
 (cd "$BASE/control" && rm .env && ROLE=control ./vpn.sh control init >/dev/null 2>&1)
-cp "$BASE"/hub/{users,exits,groups,routing}.conf "$BASE/control/"
+cp "$BASE"/hub/{users,exits,groups,routing,sites}.conf "$BASE/control/"
 fixture "$BASE/hub2" hub hub2.test
 HUB2_TOKEN=$(vpn "$BASE/hub2" "" hub control join | grep -o 'cvpn-hub:[A-Za-z0-9+/=]*')
 [[ -n $HUB2_TOKEN ]] || fail "no hub2 token"
@@ -123,21 +128,121 @@ fixture "$BASE/client" client
 setenv "$BASE/client/.env" CLIENT_SUB '"http://127.0.0.1:9/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1/sub"'
 
 # What the hub's config must have (checked with this host's jq): a key per
-# credential and route (alice 2, bob 1 + 1 rotated, carol 2), a subscription per
+# credential and route (alice 2, bob 1 + 1 rotated, carol 3), a subscription per
 # route, a profile title per route in the Caddyfile
 expect_hub() {
   local h=$1/generated
-  [[ $(jq '[.inbounds[] | select(.type == "vless") | .users[]] | length' "$h/sing-box.json") == 6 ]] ||
+  [[ $(jq '[.inbounds[] | select(.type == "vless") | .users[]] | length' "$h/sing-box.json") == 7 ]] ||
     fail "vless users: $(jq -c '[.inbounds[] | select(.type == "vless") | .users[].name]' "$h/sing-box.json")"
-  jq -e '.route.rules | any(.auth_user? // [] | index("carol@cz1/ip1")) and any(.auth_user? // [] | index("alice@local"))' \
-    "$h/sing-box.json" >/dev/null || fail "no rules for the second routes of carol / alice"
-  for f in sub sing-box.json none/sub cz1-ip1/sub cz1-ip1/sing-box.json; do
+  jq -e '.route.rules | any(.auth_user? // [] | index("carol@cz1/ip1")) and any(.auth_user? // [] | index("alice@local"))
+    and any(.auth_user? // [] | index("carol@cz1/ip1+ru"))' \
+    "$h/sing-box.json" >/dev/null || fail "no rules for the other routes of carol / alice"
+  for f in sub sing-box.json none/sub cz1-ip1/sub cz1-ip1/sing-box.json cz1-ip1--ru/sub cz1-ip1--ru/sing-box.json; do
     [[ -s $h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/$f ]] || fail "carol has no $f"
   done
   [[ ! -e $h/sub/b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2/cz1-ip1 ]] || fail "bob has a route he doesn't have"
   cmp -s "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/sub" "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/none/sub" ||
     fail "carol's main subscription isn't her first route"
   [[ $(grep -c 'profile-title' "$h/Caddyfile") -ge 4 ]] || fail "no profile titles of the routes in the Caddyfile"
+  base64 -d "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/cz1-ip1--ru/sub" | grep -q '^hysteria2://carol-1e3f+cz1-ip1--ru:' ||
+    fail "the links of a +ru route aren't safe: $(base64 -d "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/cz1-ip1--ru/sub")"
+  grep -q 'российские сайты тоже' "$h/sub/c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3/index.html" ||
+    fail "the import page doesn't say what the +ru route does"
+}
+
+# Where the rules of the rendered hub config send a connection: real sing-box,
+# with outbounds that lead nowhere (nothing leaves this host) and logging which
+# one was used. A connection that got no outbound was refused by the hub.
+routing_test() {
+  local dir=$1 cfg=$WORK/routing.json port=$((21000 + $$ % 1000)) token=00112233445566778899aabbccddeeff n=0 failed=0
+  jq --argjson port "$port" '
+    .log.level = "warn"
+    | .inbounds = [.inbounds[] | select(.tag == "check-in") | .listen_port = $port]
+    | .outbounds = [.outbounds[] | {type: "socks", tag, server: "127.0.0.1", server_port: 1}]
+    | .dns.servers = [{type: "hosts", tag: "doh", predefined: {
+        "plain.example.ru": "203.0.113.9", "blocked.example.ru": "203.0.113.9", "keep.example.com": "203.0.113.9",
+        "sub.keep.example.com": "203.0.113.9", "listed.example.com": "203.0.113.9", "lan.example.ru": "127.0.0.1",
+        "foreign.example.com": "203.0.113.9", "other.example.ru": "203.0.113.9"}}]' \
+    "$dir/hub/generated/sing-box.json" >"$cfg"
+  "$DOCKER" run -d --rm --name "$SB_NAME" --network host -v "$cfg:/c.json:ro,z" -v "$dir/hub/data/rule-sets:/rule-sets:ro,z" \
+    "$SINGBOX_IMAGE" run -c /c.json >/dev/null
+  sleep 2
+  # expect WANT USER CURL_ARGS...: the outbound of the connection, or "refused"
+  expect() {
+    local want=$1 user=$2 got
+    shift 2
+    n=$("$DOCKER" logs "$SB_NAME" 2>&1 | wc -l)
+    curl -s -o /dev/null -m 3 --noproxy '' --proxy-user "check@$user:$token" "$@" || true
+    sleep 0.2
+    got=$("$DOCKER" logs "$SB_NAME" 2>&1 | tail -n +$((n + 1)) | { grep -o 'using outbound/socks\[[^]]*\]' || true; } | tail -1 | sed 's/.*\[//; s/\]//')
+    if [[ ${got:-refused} != "$want" ]]; then
+      echo "   FAIL: check@$user $*: ${got:-refused}, should be $want" >&2
+      failed=1
+    fi
+  }
+  name() { echo "--socks5-hostname 127.0.0.1:$port http://$1/"; }
+  # shellcheck disable=SC2046
+  {
+    # the usual: RU from the hub, the rest by the route
+    expect local cz1/ip1 $(name plain.example.ru)
+    expect cz1/ip1 cz1/ip1 $(name foreign.example.com)
+    expect local local $(name foreign.example.com)
+    expect refused none $(name foreign.example.com)
+    expect local none $(name plain.example.ru)
+    # by the IP the client sent, by the list of Russian IPs
+    expect local cz1/ip1 --socks5 "127.0.0.1:$port" http://5.8.0.1/
+    expect cz1/ip1 cz1/ip1 --socks5 "127.0.0.1:$port" http://198.51.100.1/
+    # +ru: everything through the exit, exceptions too
+    expect cz1/ip1 cz1/ip1+ru $(name plain.example.ru)
+    expect cz1/ip1 cz1/ip1+ru --socks5 "127.0.0.1:$port" http://5.8.0.1/
+    expect cz1/ip1 cz1/ip1+ru $(name foreign.example.com)
+    expect cz1/ip1 cz1/ip1+ru $(name keep.example.com)
+    # site hub: from the hub for every route, subdomains too, not lookalikes
+    expect local cz1/ip1 $(name keep.example.com)
+    expect local cz1/ip1 $(name sub.keep.example.com)
+    expect local none $(name keep.example.com)
+    expect cz1/ip1 cz1/ip1 $(name notkeep.example.com)
+    # site route: not RU, whatever the lists say; the route decides what's next
+    expect cz1/ip1 cz1/ip1 $(name blocked.example.ru)
+    expect cz1/ip1 cz1/ip1 $(name listed.example.com)
+    expect local local $(name blocked.example.ru)
+    expect refused none $(name blocked.example.ru)
+    expect local cz1/ip1 $(name other.example.ru)
+    # the name in TLS counts over a Russian IP from the client
+    expect cz1/ip1 cz1/ip1 --socks5 "127.0.0.1:$port" --resolve blocked.example.ru:443:5.8.0.1 https://blocked.example.ru/
+    expect local cz1/ip1 --socks5 "127.0.0.1:$port" --resolve foreign.example.com:443:5.8.0.1 https://foreign.example.com/
+    # nothing reaches private addresses: through the hub on any route, by name too
+    expect refused cz1/ip1+ru --socks5 "127.0.0.1:$port" http://10.1.2.3/
+    expect refused cz1/ip1 --socks5 "127.0.0.1:$port" http://10.1.2.3/
+    expect refused cz1/ip1 $(name lan.example.ru)
+  }
+  "$DOCKER" rm -f "$SB_NAME" >/dev/null
+  ((failed == 0)) || fail "the hub's rules send connections to the wrong place"
+  echo "   the hub's rules: connections leave where they should"
+}
+
+# The CLI of exceptions in control; leaves the scheme as it was
+site_test() {
+  local name=$1 bin=$2 dir=$3 bad
+  vpn "$dir/control" "$bin" control site route new.example.org >/dev/null 2>&1 || fail "$name: site route"
+  vpn "$dir/control" "$bin" control diff 2>&1 | grep -q '^  site + new.example.org: route$' || fail "$name: diff doesn't show the new site"
+  # a name and its subdomains go one way, both ways round
+  if vpn "$dir/control" "$bin" control site hub sub.new.example.org >/dev/null 2>&1; then fail "$name: a subdomain went into the other list"; fi
+  if vpn "$dir/control" "$bin" control site hub example.org >/dev/null 2>&1; then fail "$name: a parent went into the other list"; fi
+  # the same name moves; case and the last dot don't matter
+  vpn "$dir/control" "$bin" control site hub NEW.Example.org. >/dev/null 2>&1 || fail "$name: site hub moving a name"
+  [[ $(grep -c 'new.example.org' "$dir/control/sites.conf") == 1 ]] && grep -q '^new.example.org hub$' "$dir/control/sites.conf" ||
+    fail "$name: the moved name: $(cat "$dir/control/sites.conf")"
+  vpn "$dir/control" "$bin" control site del new.example.org >/dev/null 2>&1 || fail "$name: site del"
+  if vpn "$dir/control" "$bin" control site del new.example.org >/dev/null 2>&1; then fail "$name: site del of nothing"; fi
+  for bad in 'https://example.org/' '*.example.org' 'example.org:443' 1.2.3.4 com 'пример.рф' '-a.example.org' 'a b.org'; do
+    if vpn "$dir/control" "$bin" control site route "$bad" >/dev/null 2>&1; then fail "$name: site route took '$bad'"; fi
+  done
+  vpn "$dir/control" "$bin" control site list | grep -q '^keep.example.com ' || fail "$name: site list"
+  # routes: +ru only of exits that exist, as the list of the user
+  for bad in local+ru none+ru cz1/nope+ru cz1/ip1+all; do
+    if vpn "$dir/control" "$bin" control user route carol "$bad" >/dev/null 2>&1; then fail "$name: route '$bad' accepted"; fi
+  done
 }
 
 # run VARIANT JQ_BIN_DIR: render everything with that jq, list "sha256 file"
@@ -166,7 +271,8 @@ run() {
     fail "$name: control diff doesn't show the changes"
   fi
   vpn "$dir/control" "$bin" control group del qa >/dev/null 2>&1 || fail "$name: control group del"
-  vpn "$dir/control" "$bin" control user route carol none,cz1/ip1 >/dev/null 2>&1 || fail "$name: control user route back"
+  vpn "$dir/control" "$bin" control user route carol none,cz1/ip1,cz1/ip1+ru >/dev/null 2>&1 || fail "$name: control user route back"
+  site_test "$name" "$bin" "$dir"
   vpn "$dir/control" "$bin" control diff 2>&1 | grep -q '^Nothing to publish' || fail "$name: control diff after undoing"
   vpn "$dir/hub2" "$bin" hub control set "$ctl" >"$dir/hub2.log" 2>&1 || { cat "$dir/hub2.log"; fail "$name: hub2 control set"; }
   vpn "$dir/hub2" "$bin" hub control apply <"$dir/control/generated/state.txt" >>"$dir/hub2.log" 2>&1 ||
@@ -175,12 +281,20 @@ run() {
   # control's update key comes with the snapshot (code update orders, lib/remote.sh)
   [[ $(grep '^AGE-SECRET' "$dir/control/data/control/update.key") == "$(cat "$dir/hub2/data/control/update.key" 2>/dev/null)" ]] ||
     fail "$name: hub2 didn't get control's update key"
+  # exceptions come with the snapshot, are control's and reach the hub's config
+  [[ $(grep -v '^#' "$dir/control/sites.conf") == "$(grep -v '^#' "$dir/hub2/sites.conf" 2>/dev/null)" ]] ||
+    fail "$name: hub2 didn't get the exceptions"
+  jq -e '[.. | .domain_suffix? // empty | arrays | .[]] | index("keep.example.com") and index("blocked.example.ru")' \
+    "$dir/hub2/generated/sing-box.json" >/dev/null || fail "$name: the exceptions aren't in hub2's config"
+  if vpn "$dir/hub2" "$bin" hub site route x.example.org >/dev/null 2>&1; then fail "$name: a managed hub changed its exceptions"; fi
+  vpn "$dir/hub2" "$bin" hub site list | grep -q '^keep.example.com ' || fail "$name: site list on a managed hub"
   (cd "$dir" && find hub/generated exit/generated client/generated hub2/generated hub2/users.conf hub2/exits.conf \
-    hub2/groups.conf hub2/routing.conf -type f ! -name '*.tmp' ! -name status.json | sort | xargs sha256sum) >"$WORK/$name.sums"
+    hub2/groups.conf hub2/routing.conf hub2/sites.conf -type f ! -name '*.tmp' ! -name status.json | sort | xargs sha256sum) >"$WORK/$name.sums"
 }
 
 # This host's jq, then each image as "jq" first in PATH
 run local ""
+routing_test "$WORK/local"
 for image in $JQ_IMAGES; do
   "$DOCKER" image inspect "$image" >/dev/null 2>&1 || "$DOCKER" pull -q "$image" >/dev/null
   v=$(tr -c 'a-z0-9.\n' '_' <<<"$image")

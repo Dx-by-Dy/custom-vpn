@@ -105,9 +105,10 @@ scheme_json() {
   jq -n --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
     --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" --argjson hubs "$hubs" \
     --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" --arg domains "$(control_domains_line)" \
-    --argjson updates "$(conf_json "$UPDATES_FILE")" '
+    --argjson updates "$(conf_json "$UPDATES_FILE")" --argjson sites "$(conf_json "$SITES_FILE")" '
     {users: $users, groups: $groups, routing: $routing, exits: $exits, hubs: $hubs,
      settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name, CONTROL_DOMAIN: $domains}}
+    + (if $sites != [] then {sites: $sites} else {} end)
     + (if $updates != [] then {updates: $updates} else {} end)'
 }
 
@@ -159,6 +160,7 @@ cmd_control_diff() {
     cmp("routes"; by($o.routing); by($new.routing); .[0] | ": group \(.[1]), routes \(.[2])"),
     cmp("group"; by($o.groups); by($new.groups); .[0] | ": routes \(.[1])"),
     cmp("exit"; by($o.exits); by($new.exits); ""),
+    cmp("site"; by($o.sites // []); by($new.sites // []); .[0] | ": \(.[1])"),
     cmp("hub"; objs($o.hubs); objs($new.hubs); " (\(.domain))"),
     cmp("update"; orders($o.updates); orders($new.updates); ": to \(.[2][:12])"),
     ($new.settings | keys[] | select($o.settings[.] != $new.settings[.]) as $k |
@@ -305,6 +307,13 @@ cmd_import() {
       warn "exit $name exists here with another token: kept this one"
     fi
   done < <(jq -r '.exits[] | join(" ")' <<<"$json")
+  while read -r name rest; do
+    if [[ -n $(site_conflicts "$name" "$rest") ]] || conf_rows "$SITES_FILE" | awk -v d="$name" -v w="$rest" '$1 == d && $2 != w {f = 1} END {exit !f}'; then
+      warn "site $name: the hub had it as $rest, that conflicts with the exceptions here: kept these"
+    else
+      site_set "$name" "$rest"
+    fi
+  done < <(jq -r '(.sites // [])[] | join(" ")' <<<"$json")
   info "imported users: $(jq -r '[.users[][0]] | unique | join(" ")' <<<"$json")"
   # Settings stay control's: say where the hub's differ
   local key theirs
@@ -562,8 +571,9 @@ cmd_state() {
       echo "warning: this is every user's credentials; move it to control and delete it" >&2
       jq -n --argjson users "$(conf_json "$USERS_FILE")" --argjson groups "$(conf_json "$GROUPS_FILE")" \
         --argjson routing "$(conf_json "$ROUTING_FILE")" --argjson exits "$(conf_json "$EXITS_FILE")" \
+        --argjson sites "$(conf_json "$SITES_FILE")" \
         --arg route_default "${ROUTE_DEFAULT:-none}" --arg sub_name "$SUB_NAME" '
-        {v: 1, kind: "export", users: $users, groups: $groups, routing: $routing, exits: $exits,
+        {v: 1, kind: "export", users: $users, groups: $groups, routing: $routing, exits: $exits, sites: $sites,
          settings: {ROUTE_DEFAULT: $route_default, SUB_NAME: $sub_name}}'
       ;;
     *) die "usage: ./vpn.sh hub control apply [FILE] | export" ;;
@@ -608,6 +618,7 @@ state_apply() {
   conf_from_json "$GROUPS_FILE" "$GROUPS_HEADER" "$(jq -c .groups <<<"$json")"
   conf_from_json "$ROUTING_FILE" "$ROUTING_HEADER" "$(jq -c .routing <<<"$json")"
   conf_from_json "$EXITS_FILE" "$EXITS_HEADER" "$(jq -c .exits <<<"$json")"
+  conf_from_json "$SITES_FILE" "$SITES_HEADER" "$(jq -c '.sites // []' <<<"$json")"
   set_var ROUTE_DEFAULT "$(jq -r .settings.ROUTE_DEFAULT <<<"$json")"
   set_var SUB_NAME "$(jq -r .settings.SUB_NAME <<<"$json")"
   # The key of control's update orders (lib/remote.sh)

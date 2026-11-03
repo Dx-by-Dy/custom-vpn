@@ -1,11 +1,11 @@
 # shellcheck shell=bash
 # ROLE=hub: exits, groups and the route of each user; sourced by vpn.sh
 
-# A route is where a user's traffic leaves, except RU, which always leaves from
-# this hub:
-#   local        from this hub
-#   none         nowhere: only RU works (fail-closed)
-#   EXIT/IPNAME  through exit EXIT from its egress IP named IPNAME
+# A route is where a user's traffic leaves, except RU, which leaves from this hub:
+#   local           from this hub
+#   none            nowhere: only RU works (fail-closed)
+#   EXIT/IPNAME     through exit EXIT from its egress IP named IPNAME
+#   EXIT/IPNAME+ru  the same, and RU too: everything leaves through the exit
 # A user's routes: their own, else their group's, else ROUTE_DEFAULT. Each of
 # these is a list, ROUTE[,ROUTE...]: the user picks one in the app, every route
 # being a subscription of its own (/<token>/<route>/sub), the first also the
@@ -17,12 +17,15 @@
 # exits.conf:   exit  token          (the token `exit hub add` printed on the exit)
 # groups.conf:  group  routes        (routes "-": ROUTE_DEFAULT)
 # routing.conf: user  group  routes  ("-": no group / no routes of their own)
+# sites.conf:   domain  hub|route    (exceptions from what counts as RU: site ...)
 EXITS_FILE=exits.conf
 EXITS_HEADER='# exit  token'
 GROUPS_FILE=groups.conf
 GROUPS_HEADER='# group  route'
 ROUTING_FILE=routing.conf
 ROUTING_HEADER='# user  group  route'
+SITES_FILE=sites.conf
+SITES_HEADER='# domain  hub|route'
 
 # RU lists for sing-box (tag, then URL); SagerNet rebuilds them daily
 RULE_SETS_DIR=data/rule-sets
@@ -62,7 +65,7 @@ exit_routes_json() {
 route_names() {
   echo local
   echo none
-  exit_routes_json | jq -r '.[].name'
+  exit_routes_json | jq -r '.[] | .name, .name + "+ru"'
 }
 
 # (not `grep -q` in a pipe: it quits on the first match, and pipefail sees the SIGPIPE)
@@ -100,8 +103,12 @@ user_route_subs() {
   for r in ${list//,/ }; do printf '%s  %-14s %s%s/sub\n' "$3" "$r" "$2" "$(route_slug "$r")"; done
 }
 
-# A route in paths and file names: cz1/ip1 -> cz1-ip1
-route_slug() { echo "${1//\//-}"; }
+# A route in paths, file names and hysteria users: cz1/ip1 -> cz1-ip1,
+# cz1/ip1+ru -> cz1-ip1--ru (IP names can't have a "+", and it's not safe in links)
+route_slug() {
+  local s=${1//\//-}
+  echo "${s//+/--}"
+}
 
 # route_cred UUID HY_USER HY_PASS ROUTE: "uuid hysteria_user hysteria_pass" of the
 # user's key for a route other than their first: derived from their own key, so
@@ -161,12 +168,99 @@ routing_del() {
 
 group_exists() { conf_rows "$GROUPS_FILE" | awk -v n="$1" '$1 == n {f = 1} END {exit !f}'; }
 
-# Users whose route is one of the given ones (space-separated list on one line)
+# Users whose route is one of the given ones (space-separated list on one line),
+# or the same one with RU through the exit
 users_on_routes() {
   user_routes | awk -v routes=" $* " '{
     n = split($3, rs, ",")
-    for (i = 1; i <= n; i++) if (index(routes, " " rs[i] " ")) { printf "%s%s", (c++ ? " " : ""), $1; break }
+    for (i = 1; i <= n; i++) {
+      sub(/\+ru$/, "", rs[i])
+      if (index(routes, " " rs[i] " ")) { printf "%s%s", (c++ ? " " : ""), $1; break }
+    }
   }'
+}
+
+# --- exceptions from what counts as RU ---------------------------------------
+
+# {hub: [domains], route: [domains]} for templates/hub.jq
+sites_json() {
+  conf_rows "$SITES_FILE" | jq -Rn '[inputs | [splits("[ \t]+")]] |
+    {hub: [.[] | select(.[1] == "hub") | .[0]], route: [.[] | select(.[1] == "route") | .[0]]}'
+}
+
+# A domain as sites.conf keeps it, or die: lower case, without the last dot.
+# sing-box compares names as they are on the wire, so IDNs must be punycode.
+site_domain() {
+  local LC_ALL=C d=${1,,}
+  d=${d%.}
+  [[ $d == *[![:ascii:]]* ]] && die "$1: write it as punycode (xn--...), that's what connections carry"
+  [[ $d != *[/:*]* ]] || die "$1: only the name, like example.com (it covers the subdomains too)"
+  [[ ! $d =~ ^[0-9.]+$ ]] || die "$1: exceptions go by name, not by IP"
+  [[ ${#d} -le 253 && $d =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] ||
+    die "$1: not a domain with a parent, like example.com"
+  echo "$d"
+}
+
+# Domains in the other list than WHERE that are DOMAIN's parent or subdomain:
+# a name and its subdomains go one way, there is no "most specific wins"
+site_conflicts() {
+  conf_rows "$SITES_FILE" | awk -v d="$1" -v w="$2" '
+    function under(a, b) { return length(a) > length(b) && substr(a, length(a) - length(b)) == "." b }
+    $2 != w && (under(d, $1) || under($1, d)) { printf "%s%s", (n++ ? " " : ""), $1 }'
+}
+
+# site_set DOMAIN WHERE: put a checked domain into a list, out of the other one
+site_set() {
+  conf_init "$SITES_FILE" "$SITES_HEADER"
+  conf_rewrite "$SITES_FILE" -v d="$1" '/^#/ || $1 != d'
+  echo "$1 $2" >>"$SITES_FILE"
+}
+
+cmd_site() {
+  local action=${1:-} where d conflicts domains=()
+  require_role "hub control" site
+  [[ $action == list ]] || require_editable "site $action"
+  shift || true
+  case $action in
+    hub | route)
+      (($#)) || die "usage: $(vsh site "$action") DOMAIN..."
+      where=$action
+      for d in "$@"; do
+        d=$(site_domain "$d") || exit 1
+        conflicts=$(site_conflicts "$d" "$where")
+        [[ -z $conflicts ]] || die "$d overlaps $conflicts in the other list: $(vsh site del) it first"
+        domains+=("$d")
+      done
+      for d in "${domains[@]}"; do site_set "$d" "$where"; done
+      cmd_up
+      if [[ $where == hub ]]; then
+        info "${domains[*]}: from the hub, like RU (subdomains too)"
+      else
+        info "${domains[*]}: not RU, by the user's route (subdomains too)"
+      fi
+      ;;
+    del)
+      (($#)) || die "usage: $(vsh site del) DOMAIN..."
+      for d in "$@"; do
+        d=$(site_domain "$d") || exit 1
+        conf_rows "$SITES_FILE" | awk -v d="$d" '$1 == d {f = 1} END {exit !f}' || die "no exception for $d"
+        domains+=("$d")
+      done
+      for d in "${domains[@]}"; do conf_rewrite "$SITES_FILE" -v d="$d" '/^#/ || $1 != d'; done
+      cmd_up
+      info "${domains[*]}: decided by the RU lists again"
+      ;;
+    list)
+      if [[ -z $(conf_rows "$SITES_FILE") ]]; then
+        echo "No exceptions: the RU lists decide. Add one: $(vsh site hub) DOMAIN or $(vsh site route) DOMAIN"
+        return
+      fi
+      conf_rows "$SITES_FILE" | sort -k2,2 -k1,1 | awk '
+        BEGIN { printf "%-36s %s\n", "SITE (and subdomains)", "LEAVES" }
+        { printf "%-36s %s\n", $1, $2 == "hub" ? "from the hub, like RU" : "by the route of the user, not RU" }'
+      ;;
+    *) die "usage: $(vsh site) hub DOMAIN... | route DOMAIN... | del DOMAIN... | list" ;;
+  esac
 }
 
 # --- RU lists ----------------------------------------------------------------
@@ -367,7 +461,8 @@ cmd_route() {
       echo "Routes: $(route_names | paste -sd' ')"
       echo "Several routes (ROUTE,ROUTE...): the user picks one in the app; the first is the main one."
       if [[ $ROLE == control ]]; then where="always leaves from the hub the user is connected to"; else where="leaves from this hub for everyone"; fi
-      echo "RU (.ru .su .рф, Russian services, Russian IPs) $where."
+      echo "RU (.ru .su .рф, Russian services, Russian IPs) $where,"
+      echo "but on routes EXIT/IPNAME+ru: they send everything through the exit. Exceptions by name: $(vsh site list)."
       ;;
     ip)
       if [[ -n ${2:-} ]]; then
@@ -375,7 +470,9 @@ cmd_route() {
         [[ $2 != none ]] || die "route none leaves nowhere (only RU, from the hub)"
         check_route "$2"
       fi
-      if [[ $ROLE == control ]]; then control_route_ip "${2:-}"; else hub_route_ip "${2:-}"; fi
+      # The same IP with or without RU
+      where=${2:-}
+      if [[ $ROLE == control ]]; then control_route_ip "${where%+ru}"; else hub_route_ip "${where%+ru}"; fi
       ;;
     *) die "usage: $(vsh route) list | ip [ROUTE]" ;;
   esac
@@ -399,6 +496,25 @@ hub_route_ip() {
 }
 
 # --- check -------------------------------------------------------------------
+
+# Routes with RU through the exit that someone uses: RU sites must see the exit
+# as the address. Russian sites may refuse foreign addresses, so silence proves
+# nothing either way; leaving from the hub is the failure this looks for.
+check_ru_through_exit() {
+  local used route ip seen
+  used=" $(user_route_lines | awk '{print $2}' | tr ',\n' '  ') "
+  while read -r route ip; do
+    [[ $used == *" $route+ru "* ]] || continue
+    seen=$(via_ip "check@$route+ru" "$IP_ECHO_RU_URLS")
+    if [[ $seen == "$ip" ]]; then
+      report all-exit "ok ($route+ru: RU leaves as $ip)"
+    elif [[ -z $seen ]]; then
+      report all-exit "ok ($route+ru: no RU site answered through the exit, not verified)"
+    else
+      report all-exit "FAIL: $route+ru: RU leaves as $seen, should be $ip"
+    fi
+  done < <(exit_routes_json | jq -r '.[] | "\(.name) \(.ip)"')
+}
 
 # Each route of exit NAME (all exits without one) leaves from the IP it should;
 # uses report from cmd_check, or prints when called on its own
@@ -432,6 +548,7 @@ check_routes() {
   else
     report ru "FAIL: RU sites ($IP_ECHO_RU_URLS) with no route: leave $(leaves_as "$seen"), should be ${local_ip:-the hub}"
   fi
+  check_ru_through_exit
 
   for entry in "${RULE_SETS[@]}"; do
     tag=${entry%% *} file=$RULE_SETS_DIR/$tag.srs
