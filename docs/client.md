@@ -5,11 +5,7 @@
 ## Развертывание
 
 ```sh
-# в control: отдельный пользователь под этот сервер
-./vpn.sh control user add ci-runner --route cz1/ip1
-./vpn.sh control user links ci-runner                   # ссылка на подписку на каждом хабе
-
-# на сервере
+# на клиенте:
 git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn && cd /opt/custom-vpn
 ./vpn.sh client install-docker                    # если docker еще нет
 CLIENT_SUB='https://hub1.example.ru:8443/<token>/sub https://hub2.example.ru:8443/<token>/sub' ./vpn.sh client deploy
@@ -26,11 +22,11 @@ CLIENT_SUB='https://hub1.example.ru:8443/<token>/sub https://hub2.example.ru:844
 ./vpn.sh client protocol hy2         # auto | reality | hy2
 ```
 
-| Протокол | Что выбирает `urltest` |
-|---|---|
+| Протокол                   | Что выбирает `urltest`                                        |
+| ---------------------------------- | -------------------------------------------------------------------------- |
 | `auto` (по умолчанию) | самый быстрый хаб на любом из протоколов |
-| `reality` | самый быстрый хаб на VLESS REALITY (tcp) |
-| `hy2` | самый быстрый хаб на Hysteria 2 (udp) |
+| `reality`                        | самый быстрый хаб на VLESS REALITY (tcp)                  |
+| `hy2`                            | самый быстрый хаб на Hysteria 2 (udp)                     |
 
 - Протокол сужает выбор, но хабы по-прежнему подменяют друг друга; с `reality` или `hy2` переключения на другой протокол нет, и если он здесь заблокирован, прокси не работает. После переключения команда проверяет прокси и предупреждает, если через него ничего не идет, но выбор не отменяет.
 - Маршрут — один из списка пользователя (`control user route`), на каждый у него свой ключ. Если хаб не отдает такой маршрут, `client route` ничего не меняет. С маршрутом `il1/ip1+ru` RU тоже идет через exit, и `urltest` меряет хабы через него.

@@ -100,6 +100,7 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
                   exit   add NAME TOKEN | del NAME | list | token NAME
                   hub    add NAME TOKEN | token NAME | del NAME | list
                   hub|exit update [NAME|--all [COMMIT|-]]   (код на хабах / exit'ах, после publish)
+                  stable [COMMIT|-] | rollback NAME...|--all   (куда откатываться; откат сразу с publish)
                   route  list | ip [ROUTE]
                   site   hub DOMAIN... | route DOMAIN... | del DOMAIN... | list   (исключения из RU)
                   diff | publish | check | dns | import FILE | prune
@@ -108,6 +109,7 @@ DOCKER=podman tests/templates.sh   # конфиги всех ролей на jq 
 
 ./vpn.sh hub      deploy | init | up | down | logs | check | prune | render
                   control join | set TOKEN | sync | apply [FILE] | export | unset
+                  rollback [COMMIT]   (и на exit'е; если сломан vpn.sh: sh data/control/rollback.sh)
                   user …, group …, exit …, site …, route list|ip   (как в control; под control — только просмотр)
                   update repo [COMMIT]|images|rules | firewall [--dry-run] | tune | install-docker | uninstall
 

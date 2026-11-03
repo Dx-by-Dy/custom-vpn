@@ -94,6 +94,7 @@ RU (имена `.ru .su .рф`, список `geosite-category-ru`, россий
 - Снимок вручную, если DNS недоступен: `./vpn.sh hub control apply < state.txt` (с ноутбука: `ssh root@хаб 'cd /opt/custom-vpn && ./vpn.sh hub control apply' < generated/state.txt`).
 - `./vpn.sh hub control unset` — снова управлять пользователями здесь (остаются пользователи последнего снимка), таймер снимается.
 - Ключ шифрования снимков хаба — `data/control/age.key`; он есть только на этом хабе.
+- Назад: `./vpn.sh hub rollback` или, если сломан сам `vpn.sh`, `sh data/control/rollback.sh` ([план действий](control.md#если-обновление-что-то-сломало)).
 - Код обновляется приказом из control (`./vpn.sh control hub update`): тот же таймер читает его и делает `update repo` до приказанного коммита — только вперед, с откатом, если `check` после стал хуже. Итог — строка `update` в `./vpn.sh hub check` (и в `status.json` для `control check`).
 
 ## Проверка

@@ -25,6 +25,8 @@ git clone https://github.com/Dx-by-Dy/custom-vpn.git /opt/custom-vpn && cd /opt/
 
 Поменять IP или имя: правка `EXIT_IPS`, `./vpn.sh exit up`, затем `./vpn.sh exit hub token main` и новый токен — `exit add` с тем же именем в control. Пока токен не обновлен, маршруты с удаленными IP не работают (переключения на другой IP нет).
 
+Что сейчас на exit'е видно и в control (`./vpn.sh control exit update`, `./vpn.sh control check`), и здесь: строка `code` в `./vpn.sh exit check`. Exit занимает порт `CHECK_PORT` + 1 на localhost под свой отчет ([как это устроено](../ARCHITECTURE.md#приказы-обновить-код)).
+
 ## Обновление из control
 
 ```sh
